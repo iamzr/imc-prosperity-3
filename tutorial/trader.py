@@ -1,6 +1,8 @@
 import json
-from datamodel import OrderDepth, UserId, TradingState, Order, Symbol, Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
-from typing import List, Any
+from abc import ABC, abstractmethod
+from typing import Any
+
+from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 
 # Product Aliases
 RAINFOREST_RESIN: Symbol = "RAINFOREST_RESIN"
@@ -132,13 +134,41 @@ class Logger:
 
 logger = Logger()
 
+# Helper functions
+def get_best_ask(state: TradingState, symbol: Symbol):
+    order_depth = state.order_depths.get(symbol)
+
+    if order_depth is None or len(order_depth.sell_orders) == 0:
+        return None, None
+
+    return list(order_depth.sell_orders.items())[0]
+
+
+def get_best_bid(state: TradingState, symbol: Symbol):
+    order_depth = state.order_depths.get(symbol)
+
+    if order_depth is None or len(order_depth.buy_orders) == 0:
+        return None, None
+
+    return list(order_depth.buy_orders.items())[0]
+
+
+def get_mid_price(state: TradingState, symbol: Symbol):
+    best_ask, _ = get_best_ask(state, symbol)
+    best_bid, _ = get_best_bid(state, symbol)
+
+    if best_ask and best_bid:
+        return (best_ask + best_bid) // 2
+
+    return None
+
 
 class Orders():
     def __init__(self, state: TradingState) -> None:
         self._orders = {}
         self._state = state
 
-    def get_orders(self) -> dict[Symbol, int]:
+    def get_orders(self) -> dict[Symbol, list[Order]]:
         return self._orders
 
     def add_order(self, symbol: Symbol, price: int, quantity: int) -> None:
@@ -151,6 +181,7 @@ class Orders():
 
         # We want to prevent the orders being sent exceeding the position limit.
         limit = PRODUCT_LIMITS[symbol]
+
         next_position = self._state.position.get(
             symbol, 0) + self._orders.get(symbol, 0) + quantity
 
@@ -165,32 +196,46 @@ class Orders():
         self._orders.setdefault(symbol, []).append(order)
 
 
-class Trader:
+class Strategy(ABC):
+    def __init__(self, state: TradingState, orders: Orders) -> None:
+        self._state = state
+        self._orders = orders
 
-    def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
-        # Only method required. It takes all buy and sell orders for all symbols as an input, and outputs a list of orders to be sent
-        logger.print("traderData: " + state.traderData)
-        logger.print("Observations: " + str(state.observations))
-        orders = Orders(state)
+    def run(self):
+        self._run()
 
-        for product in state.order_depths:
-            order_depth: OrderDepth = state.order_depths[product]
+    @abstractmethod
+    def _run(self):
+        raise NotImplementedError()
+
+class DummyStrategy(Strategy):
+    def _run(self):
+        for product in self._state.order_depths:
             acceptable_price = 100  # Participant should calculate this value
             logger.print("Acceptable price : " + str(acceptable_price))
-            logger.print("Buy Order depth : " + str(len(order_depth.buy_orders)) +
-                         ", Sell order depth : " + str(len(order_depth.sell_orders)))
+            best_ask, best_ask_amount=get_best_ask(self._state, product)
 
-            if len(order_depth.sell_orders) != 0:
-                best_ask, best_ask_amount = list(
-                    order_depth.sell_orders.items())[0]
+            if best_ask_amount is not None:
                 if int(best_ask) < acceptable_price:
-                    orders.add_order(product, best_ask, -best_ask)
+                    self._orders.add_order(product, best_ask, -best_ask)
 
-            if len(order_depth.buy_orders) != 0:
-                best_bid, best_bid_amount = list(
-                    order_depth.buy_orders.items())[0]
+            best_bid, best_bid_amount=get_best_bid(self._state, product)
+
+            if best_bid_amount is not None:
                 if int(best_bid) > acceptable_price:
-                    orders.add_order(product, best_bid, -best_bid_amount)
+                    self._orders.add_order(product, best_bid, -best_bid_amount)
+
+
+
+class Trader:
+    def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
+        logger.print("traderData: " + state.traderData)
+        logger.print("Observations: " + str(state.observations))
+
+        orders = Orders(state)
+
+        # Run strategies
+        DummyStrategy(state, orders).run()
 
         # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
         trader_data = "SAMPLE"
