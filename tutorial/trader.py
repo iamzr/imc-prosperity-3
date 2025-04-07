@@ -1,41 +1,201 @@
-from datamodel import OrderDepth, UserId, TradingState, Order
-from typing import List
-import string
+import json
+from datamodel import OrderDepth, UserId, TradingState, Order, Symbol, Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from typing import List, Any
+
+# Product Aliases
+RAINFOREST_RESIN: Symbol = "RAINFOREST_RESIN"
+KELP: Symbol = "KELP"
+
+# Product Limits
+PRODUCT_LIMITS = {
+    RAINFOREST_RESIN: 50,
+    KELP: 50,
+}
+
+
+class Logger:
+    def __init__(self) -> None:
+        self.logs = ""
+        self.max_log_length = 3750
+
+    def print(self, *objects: Any, sep: str = " ", end: str = "\n") -> None:
+        self.logs += sep.join(map(str, objects)) + end
+
+    def flush(self, state: TradingState, orders: dict[Symbol, list[Order]], conversions: int, trader_data: str) -> None:
+        base_length = len(
+            self.to_json(
+                [
+                    self.compress_state(state, ""),
+                    self.compress_orders(orders),
+                    conversions,
+                    "",
+                    "",
+                ]
+            )
+        )
+
+        # We truncate state.traderData, trader_data, and self.logs to the same max. length to fit the log limit
+        max_item_length = (self.max_log_length - base_length) // 3
+
+        print(
+            self.to_json(
+                [
+                    self.compress_state(state, self.truncate(
+                        state.traderData, max_item_length)),
+                    self.compress_orders(orders),
+                    conversions,
+                    self.truncate(trader_data, max_item_length),
+                    self.truncate(self.logs, max_item_length),
+                ]
+            )
+        )
+
+        self.logs = ""
+
+    def compress_state(self, state: TradingState, trader_data: str) -> list[Any]:
+        return [
+            state.timestamp,
+            trader_data,
+            self.compress_listings(state.listings),
+            self.compress_order_depths(state.order_depths),
+            self.compress_trades(state.own_trades),
+            self.compress_trades(state.market_trades),
+            state.position,
+            self.compress_observations(state.observations),
+        ]
+
+    def compress_listings(self, listings: dict[Symbol, Listing]) -> list[list[Any]]:
+        compressed = []
+        for listing in listings.values():
+            compressed.append(
+                [listing.symbol, listing.product, listing.denomination])
+
+        return compressed
+
+    def compress_order_depths(self, order_depths: dict[Symbol, OrderDepth]) -> dict[Symbol, list[Any]]:
+        compressed = {}
+        for symbol, order_depth in order_depths.items():
+            compressed[symbol] = [
+                order_depth.buy_orders, order_depth.sell_orders]
+
+        return compressed
+
+    def compress_trades(self, trades: dict[Symbol, list[Trade]]) -> list[list[Any]]:
+        compressed = []
+        for arr in trades.values():
+            for trade in arr:
+                compressed.append(
+                    [
+                        trade.symbol,
+                        trade.price,
+                        trade.quantity,
+                        trade.buyer,
+                        trade.seller,
+                        trade.timestamp,
+                    ]
+                )
+
+        return compressed
+
+    def compress_observations(self, observations: Observation) -> list[Any]:
+        conversion_observations = {}
+        for product, observation in observations.conversionObservations.items():
+            conversion_observations[product] = [
+                observation.bidPrice,
+                observation.askPrice,
+                observation.transportFees,
+                observation.exportTariff,
+                observation.importTariff,
+                observation.sugarPrice,
+                observation.sunlightIndex,
+            ]
+
+        return [observations.plainValueObservations, conversion_observations]
+
+    def compress_orders(self, orders: dict[Symbol, list[Order]]) -> list[list[Any]]:
+        compressed = []
+        for arr in orders.values():
+            for order in arr:
+                compressed.append([order.symbol, order.price, order.quantity])
+
+        return compressed
+
+    def to_json(self, value: Any) -> str:
+        return json.dumps(value, cls=ProsperityEncoder, separators=(",", ":"))
+
+    def truncate(self, value: str, max_length: int) -> str:
+        if len(value) <= max_length:
+            return value
+
+        return value[: max_length - 3] + "..."
+
+
+logger = Logger()
+
+
+class Orders():
+    def __init__(self, state: TradingState) -> None:
+        self._orders = {}
+        self._state = state
+
+    def get_orders(self) -> dict[Symbol, int]:
+        return self._orders
+
+    def add_order(self, symbol: Symbol, price: int, quantity: int) -> None:
+        if quantity == 0:
+            logger.print(f"ERROR: No quantity provided.")
+            # TODO raise error
+            return
+
+        BUY_SELL = "BUY" if quantity > 0 else "SELL"
+
+        # We want to prevent the orders being sent exceeding the position limit.
+        limit = PRODUCT_LIMITS[symbol]
+        next_position = self._state.position.get(
+            symbol, 0) + self._orders.get(symbol, 0) + quantity
+
+        if -limit > next_position or next_position > limit:
+            # TODO raise error
+            logger.print(
+                f"ERROR: Position Limit will be exceeded if the current order is added in addition to orders in queue.")
+            return
+
+        logger.print(f"Added order {BUY_SELL} {quantity} at {price}")
+        order = Order(symbol, price, quantity)
+        self._orders.setdefault(symbol, []).append(order)
 
 
 class Trader:
 
-    def run(self, state: TradingState):
+    def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         # Only method required. It takes all buy and sell orders for all symbols as an input, and outputs a list of orders to be sent
-        print("traderData: " + state.traderData)
-        print("Observations: " + str(state.observations))
-        result = {}
+        logger.print("traderData: " + state.traderData)
+        logger.print("Observations: " + str(state.observations))
+        orders = Orders(state)
+
         for product in state.order_depths:
             order_depth: OrderDepth = state.order_depths[product]
-            orders: List[Order] = []
-            acceptable_price = 2  # Participant should calculate this value
-            print("Acceptable price : " + str(acceptable_price))
-            print("Buy Order depth : " + str(len(order_depth.buy_orders)) +
-                  ", Sell order depth : " + str(len(order_depth.sell_orders)))
+            acceptable_price = 100  # Participant should calculate this value
+            logger.print("Acceptable price : " + str(acceptable_price))
+            logger.print("Buy Order depth : " + str(len(order_depth.buy_orders)) +
+                         ", Sell order depth : " + str(len(order_depth.sell_orders)))
 
             if len(order_depth.sell_orders) != 0:
                 best_ask, best_ask_amount = list(
                     order_depth.sell_orders.items())[0]
                 if int(best_ask) < acceptable_price:
-                    print("BUY", str(-best_ask_amount) + "x", best_ask)
-                    orders.append(Order(product, best_ask, -best_ask_amount))
+                    orders.add_order(product, best_ask, -best_ask)
 
             if len(order_depth.buy_orders) != 0:
                 best_bid, best_bid_amount = list(
                     order_depth.buy_orders.items())[0]
                 if int(best_bid) > acceptable_price:
-                    print("SELL", str(best_bid_amount) + "x", best_bid)
-                    orders.append(Order(product, best_bid, -best_bid_amount))
-
-            result[product] = orders
+                    orders.add_order(product, best_bid, -best_bid_amount)
 
         # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
-        traderData = "SAMPLE"
+        trader_data = "SAMPLE"
 
         conversions = 1
-        return result, conversions, traderData
+        result = orders.get_orders()
+        logger.flush(state, result, conversions, trader_data)
+        return result, conversions, trader_data
