@@ -2,6 +2,8 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any
 
+import jsonpickle
+
 from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 
 # Product Aliases
@@ -231,14 +233,14 @@ class Trader:
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         logger.print("traderData: " + state.traderData)
         logger.print("Observations: " + str(state.observations))
+        trader_data = jsonpickle.decode(state.traderData) if state.traderData else {}
 
         orders = Orders(state)
 
         # Run strategies
         DummyStrategy(state, orders).run()
 
-        # String value holding Trader state data required. It will be delivered as TradingState.traderData on next execution.
-        trader_data = "SAMPLE"
+        trader_data = jsonpickle.encode(trader_data)
 
         conversions = 1
         result = orders.get_orders()
