@@ -1,4 +1,5 @@
 import json
+import pandas as pd
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -9,11 +10,13 @@ from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder
 # Product Aliases
 RAINFOREST_RESIN: Symbol = "RAINFOREST_RESIN"
 KELP: Symbol = "KELP"
+SQUID_INK: Symbol = "SQUID_INK"
 
 # Product Limits
 PRODUCT_LIMITS = {
     RAINFOREST_RESIN: 50,
     KELP: 50,
+    SQUID_INK: 50
 }
 
 
@@ -268,6 +271,48 @@ class AcceptablePriceStrategy(Strategy):
                 if self._best_only:
                     break
 
+def _ema(price_history: list[float], span: int) -> int:
+    """
+    Method to calculate exponential moving average.
+
+    :param span: the number of periods for the ema.
+    """
+    data_series = pd.Series(price_history[-span:])
+    return int(data_series.ewm(span=span, adjust=False).mean().tail(1))
+
+
+def ema(state, trader_data, product: Symbol, span: int) -> int | None:
+    key = f"{product}_PRICES"
+
+    price = _ema(trader_data[key], span) if trader_data.get(key) else None
+
+    mid_price = get_mid_price(state, product)
+    prices = trader_data.setdefault(key, [])
+
+    if len(prices) > span:
+        prices.pop(0)
+
+    prices.append(mid_price)
+
+    return price
+
+class AcceptablePriceWithEmaStrategy(Strategy):
+    def __init__(self, state: TradingState, orders: Orders, trader_data: dict, product: Symbol, span: int, best_only: bool = True) -> None:
+        super().__init__(state, orders)
+        self._trading_data = trader_data
+        self._product = product
+        self._span = span
+        self._best_only = best_only
+
+    def _run(self):
+        price = ema(self._state, self._trading_data, self._product, self._span)
+        if price is None:
+            return
+
+        s = AcceptablePriceStrategy(state=self._state, orders=self._orders, product=self._product,
+                                    acceptable_ask_price=price, acceptable_bid_price=price, best_only=self._best_only)
+        s.run()
+
 
 class Trader:
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
@@ -280,6 +325,7 @@ class Trader:
         # Run strategies
         # DummyStrategy(state, orders).run()
         AcceptablePriceStrategy(state, orders, RAINFOREST_RESIN, 10_000, 10_000).run()
+        AcceptablePriceWithEmaStrategy(state, orders, trader_data, KELP, 3).run()
 
         trader_data = jsonpickle.encode(trader_data)
 
