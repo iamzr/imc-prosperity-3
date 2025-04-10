@@ -167,14 +167,24 @@ def get_mid_price(state: TradingState, symbol: Symbol):
 
     return None
 
-
-class Orders():
+class Orders:
     def __init__(self, state: TradingState) -> None:
-        self._orders = {}
+        self._orders: dict[Symbol, list[Order]] = {}
         self._state = state
+
+    def remaining_quantity(self, symbol: Symbol) -> int:
+        """The quantity of units of a symbol between the current orders and the position limit"""
+        remaining = PRODUCT_LIMITS[symbol] - self.get_current_quantity(symbol)
+
+        return remaining if remaining > 0 else 0
+
 
     def get_orders(self) -> dict[Symbol, list[Order]]:
         return self._orders
+
+    def get_current_quantity(self, symbol: Symbol) -> int:
+        return self._state.position.get(
+            symbol, 0) + sum(order.quantity for order in self._orders.get(symbol, []))
 
     def add_order(self, symbol: Symbol, price: int, quantity: int) -> None:
         if quantity == 0:
@@ -182,13 +192,16 @@ class Orders():
             # TODO raise error
             return
 
+        if price < 0:
+            logger.print(f"ERROR: invalid price {price} provided.")
+            return
+
         BUY_SELL = "BUY" if quantity > 0 else "SELL"
 
         # We want to prevent the orders being sent exceeding the position limit.
         limit = PRODUCT_LIMITS[symbol]
 
-        next_position = self._state.position.get(
-            symbol, 0) + self._orders.get(symbol, 0) + quantity
+        next_position = self.get_current_quantity(symbol) + quantity
 
         if -limit > next_position or next_position > limit:
             # TODO raise error
@@ -296,6 +309,7 @@ def ema(state, trader_data, product: Symbol, span: int) -> int | None:
 
     return price
 
+
 class AcceptablePriceWithEmaStrategy(Strategy):
     def __init__(self, state: TradingState, orders: Orders, trader_data: dict, product: Symbol, span: int, best_only: bool = True) -> None:
         super().__init__(state, orders)
@@ -314,7 +328,86 @@ class AcceptablePriceWithEmaStrategy(Strategy):
         s.run()
 
 
+def _sma(price_history: list[float], span: int) -> int:
+    """
+    Method to calculate exponential moving average.
+
+    :param span: the number of periods for the ema.
+    """
+    data_series = pd.Series(price_history[-span:])
+    return int(data_series.rolling(window=span, min_periods=1).mean().tail(1))
+
+
+def sma(state, trader_data, product: Symbol, span: int) -> int | None:
+    key = f"{product}_PRICES"
+
+    price = _sma(trader_data[key], span) if trader_data.get(key) else None
+
+    mid_price = get_mid_price(state, product)
+    prices = trader_data.setdefault(key, [])
+
+    if len(prices) > span:
+        prices.pop(0)
+
+    prices.append(mid_price)
+
+    return price
+
+
+
+class AcceptablePriceWithSmaStrategy(Strategy):
+    def __init__(self, state: TradingState, orders: Orders, trader_data: dict, product: Symbol, span: int, best_only: bool = True) -> None:
+        super().__init__(state, orders)
+        self._trading_data = trader_data
+        self._product = product
+        self._span = span
+        self._best_only = best_only
+
+    def _run(self):
+        price = sma(self._state, self._trading_data, self._product, self._span)
+        if price is None:
+            return
+
+        s = AcceptablePriceStrategy(state=self._state, orders=self._orders, product=self._product,
+                                    acceptable_ask_price=price, acceptable_bid_price=price, best_only=self._best_only)
+        s.run()
+
+class MarketMaking(Strategy):
+    def __init__(self, state: TradingState, orders: Orders, symbol: Symbol, spread: int, quantity: int):
+        super().__init__(state, orders)
+        self._symbol = symbol
+        self._spread = spread
+
+        if quantity < 0:
+            quantity *= -1
+
+        self._quantity = quantity
+
+
+    def _get_prices(self) -> [int, int]:
+        mid_price = get_mid_price(self._state, self._symbol)
+
+        if self._spread > mid_price:
+            return None, None
+
+        if mid_price:
+            return (mid_price - self._spread) // 2, (mid_price + self._spread) // 2
+
+        return None, None
+
+    def _run(self):
+        bid_price, ask_price = self._get_prices()
+
+        if bid_price is None and ask_price is None:
+            return
+
+        self._orders.add_order(self._symbol, bid_price, self._quantity)
+        self._orders.add_order(self._symbol, ask_price, -self._quantity)
+
+
+
 class Trader:
+
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         logger.print("traderData: " + state.traderData)
         logger.print("Observations: " + str(state.observations))
@@ -325,7 +418,11 @@ class Trader:
         # Run strategies
         # DummyStrategy(state, orders).run()
         AcceptablePriceStrategy(state, orders, RAINFOREST_RESIN, 10_000, 10_000).run()
-        AcceptablePriceWithEmaStrategy(state, orders, trader_data, KELP, 3).run()
+        AcceptablePriceWithEmaStrategy(state, orders, trader_data, KELP, 5).run()
+        # AcceptablePriceWithEmaStrategy(state, orders, trader_data, SQUID_INK, 5).run()
+
+        MarketMaking(state, orders, SQUID_INK, 10, 10).run()
+        # MarketMaking(state, orders, SQUID_INK, 10, PRODUCT_LIMITS[SQUID_INK]).run()
 
         trader_data = jsonpickle.encode(trader_data)
 
