@@ -215,33 +215,29 @@ class Orders:
 
 
 class Strategy(ABC):
-    def __init__(self, state: TradingState, orders: Orders) -> None:
-        self._state = state
-        self._orders = orders
-
-    def run(self):
-        self._run()
+    def run(self, state: TradingState, orders: Orders, trader_data):
+        self._run(state, orders, trader_data)
 
     @abstractmethod
-    def _run(self):
+    def _run(self, state: TradingState, orders: Orders, trader_data):
         raise NotImplementedError()
 
 class DummyStrategy(Strategy):
-    def _run(self):
-        for product in self._state.order_depths:
+    def _run(self, state: TradingState, orders: Orders, trader_data):
+        for product in state.order_depths:
             acceptable_price = 100  # Participant should calculate this value
             logger.print("Acceptable price : " + str(acceptable_price))
-            best_ask, best_ask_amount=get_best_ask(self._state, product)
+            best_ask, best_ask_amount=get_best_ask(state, product)
 
             if best_ask_amount is not None:
                 if int(best_ask) < acceptable_price:
-                    self._orders.add_order(product, best_ask, -best_ask)
+                    orders.add_order(product, best_ask, -best_ask)
 
-            best_bid, best_bid_amount=get_best_bid(self._state, product)
+            best_bid, best_bid_amount=get_best_bid(state, product)
 
             if best_bid_amount is not None:
                 if int(best_bid) > acceptable_price:
-                    self._orders.add_order(product, best_bid, -best_bid_amount)
+                    orders.add_order(product, best_bid, -best_bid_amount)
 
 
 class AcceptablePriceStrategy(Strategy):
@@ -250,20 +246,18 @@ class AcceptablePriceStrategy(Strategy):
     """
 
     def __init__(self,
-                 state: TradingState,
-                 orders: Orders, product: Symbol,
+                 product: Symbol,
                  acceptable_bid_price: int,
                  acceptable_ask_price: int,
                  best_only: bool = True) -> None:
 
-        super().__init__(state, orders)
         self._product = product
         self._acceptable_bid_price = acceptable_bid_price
         self._acceptable_ask_price = acceptable_ask_price
         self._best_only = best_only
 
-    def _run(self):
-        order_depth = self._state.order_depths.get(self._product)
+    def _run(self, state: TradingState, orders: Orders, trader_data):
+        order_depth = state.order_depths.get(self._product)
 
         if order_depth is None:
             return
@@ -271,7 +265,7 @@ class AcceptablePriceStrategy(Strategy):
         if len(order_depth.sell_orders) != 0:
             for ask, amount in order_depth.sell_orders.items():
                 if int(ask) < self._acceptable_ask_price:
-                    self._orders.add_order(self._product, ask, -amount)
+                    orders.add_order(self._product, ask, -amount)
 
                 if self._best_only:
                     break
@@ -279,7 +273,7 @@ class AcceptablePriceStrategy(Strategy):
         if len(order_depth.buy_orders) != 0:
             for bid, amount in order_depth.buy_orders.items():
                 if int(bid) > self._acceptable_bid_price:
-                    self._orders.add_order(self._product, bid, -amount)
+                    orders.add_order(self._product, bid, -amount)
 
                 if self._best_only:
                     break
@@ -311,21 +305,19 @@ def ema(state, trader_data, product: Symbol, span: int) -> int | None:
 
 
 class AcceptablePriceWithEmaStrategy(Strategy):
-    def __init__(self, state: TradingState, orders: Orders, trader_data: dict, product: Symbol, span: int, best_only: bool = True) -> None:
-        super().__init__(state, orders)
-        self._trading_data = trader_data
+    def __init__(self, product: Symbol, span: int, best_only: bool = True) -> None:
         self._product = product
         self._span = span
         self._best_only = best_only
 
-    def _run(self):
-        price = ema(self._state, self._trading_data, self._product, self._span)
+    def _run(self, state: TradingState, orders: Orders, trader_data):
+        price = ema(state, trader_data, self._product, self._span)
         if price is None:
             return
 
-        s = AcceptablePriceStrategy(state=self._state, orders=self._orders, product=self._product,
+        s = AcceptablePriceStrategy(product=self._product,
                                     acceptable_ask_price=price, acceptable_bid_price=price, best_only=self._best_only)
-        s.run()
+        s.run(state, orders, trader_data)
 
 
 def _sma(price_history: list[float], span: int) -> int:
@@ -356,25 +348,23 @@ def sma(state, trader_data, product: Symbol, span: int) -> int | None:
 
 
 class AcceptablePriceWithSmaStrategy(Strategy):
-    def __init__(self, state: TradingState, orders: Orders, trader_data: dict, product: Symbol, span: int, best_only: bool = True) -> None:
+    def __init__(self, state: TradingState, orders: Orders, product: Symbol, span: int, best_only: bool = True) -> None:
         super().__init__(state, orders)
-        self._trading_data = trader_data
         self._product = product
         self._span = span
         self._best_only = best_only
 
-    def _run(self):
-        price = sma(self._state, self._trading_data, self._product, self._span)
+    def _run(self, state: TradingState, orders: Orders, trader_data):
+        price = sma(state, self._product, self._span)
         if price is None:
             return
 
-        s = AcceptablePriceStrategy(state=self._state, orders=self._orders, product=self._product,
+        s = AcceptablePriceStrategy(product=self._product,
                                     acceptable_ask_price=price, acceptable_bid_price=price, best_only=self._best_only)
-        s.run()
+        s.run(state, orders, trader_data)
 
 class MarketMaking(Strategy):
-    def __init__(self, state: TradingState, orders: Orders, symbol: Symbol, spread: int, quantity: int):
-        super().__init__(state, orders)
+    def __init__(self, symbol: Symbol, spread: int, quantity: int):
         self._symbol = symbol
         self._spread = spread
 
@@ -384,8 +374,8 @@ class MarketMaking(Strategy):
         self._quantity = quantity
 
 
-    def _get_prices(self) -> [int, int]:
-        mid_price = get_mid_price(self._state, self._symbol)
+    def _get_prices(self, state) -> [int, int]:
+        mid_price = get_mid_price(state, self._symbol)
 
         if self._spread > mid_price:
             return None, None
@@ -395,18 +385,28 @@ class MarketMaking(Strategy):
 
         return None, None
 
-    def _run(self):
-        bid_price, ask_price = self._get_prices()
+    def _run(self, state: TradingState, orders: Orders, trader_data):
+        bid_price, ask_price = self._get_prices(state)
 
         if bid_price is None and ask_price is None:
             return
 
-        self._orders.add_order(self._symbol, bid_price, self._quantity)
-        self._orders.add_order(self._symbol, ask_price, -self._quantity)
+        orders.add_order(self._symbol, bid_price, self._quantity)
+        orders.add_order(self._symbol, ask_price, -self._quantity)
 
 
 
 class Trader:
+    def __init__(self):
+        self._strategies = [
+            # DummyStrategy(),
+            AcceptablePriceStrategy(RAINFOREST_RESIN, 10_000, 10_000),
+            AcceptablePriceWithEmaStrategy(KELP, 5),
+            # AcceptablePriceWithEmaStrategy(trader_data, SQUID_INK, 5),
+            MarketMaking(SQUID_INK, 10, 10),
+            # MarketMaking(SQUID_INK, 10, PRODUCT_LIMITS[SQUID_INK]),
+
+        ]
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         logger.print("traderData: " + state.traderData)
@@ -416,13 +416,8 @@ class Trader:
         orders = Orders(state)
 
         # Run strategies
-        # DummyStrategy(state, orders).run()
-        AcceptablePriceStrategy(state, orders, RAINFOREST_RESIN, 10_000, 10_000).run()
-        AcceptablePriceWithEmaStrategy(state, orders, trader_data, KELP, 5).run()
-        # AcceptablePriceWithEmaStrategy(state, orders, trader_data, SQUID_INK, 5).run()
-
-        MarketMaking(state, orders, SQUID_INK, 10, 10).run()
-        # MarketMaking(state, orders, SQUID_INK, 10, PRODUCT_LIMITS[SQUID_INK]).run()
+        for strategy in self._strategies:
+            strategy.run(state, orders, trader_data)
 
         trader_data = jsonpickle.encode(trader_data)
 
