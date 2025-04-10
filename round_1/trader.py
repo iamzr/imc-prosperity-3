@@ -13,7 +13,7 @@ KELP: Symbol = "KELP"
 SQUID_INK: Symbol = "SQUID_INK"
 
 # Product Limits
-PRODUCT_LIMITS = {
+POSITION_LIMITS = {
     RAINFOREST_RESIN: 50,
     KELP: 50,
     SQUID_INK: 50
@@ -174,7 +174,7 @@ class Orders:
 
     def remaining_quantity(self, symbol: Symbol) -> int:
         """The quantity of units of a symbol between the current orders and the position limit"""
-        remaining = PRODUCT_LIMITS[symbol] - self.get_current_quantity(symbol)
+        remaining = POSITION_LIMITS[symbol] - self.get_current_quantity(symbol)
 
         return remaining if remaining > 0 else 0
 
@@ -199,7 +199,7 @@ class Orders:
         BUY_SELL = "BUY" if quantity > 0 else "SELL"
 
         # We want to prevent the orders being sent exceeding the position limit.
-        limit = PRODUCT_LIMITS[symbol]
+        limit = POSITION_LIMITS[symbol]
 
         next_position = self.get_current_quantity(symbol) + quantity
 
