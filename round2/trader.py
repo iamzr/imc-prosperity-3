@@ -1132,7 +1132,7 @@ class Trade:
         #     mu=0,
         #     sigma=1.5, # was default 0.3959
         #     gamma=0.1, # was 0.1 
-        #     order_amount=50
+        #     order_amount=250
         # ))
 
         return orders
@@ -1150,7 +1150,7 @@ class Trade:
         #     mu=0,
         #     sigma=1.5, # was default 0.3959
         #     gamma=0.1, # was 0.1 
-        #     order_amount=50
+        #     order_amount=350
         # ))
 
         return orders
@@ -1168,7 +1168,7 @@ class Trade:
         #     mu=0,
         #     sigma=1.5, # was default 0.3959
         #     gamma=0.1, # was 0.1 
-        #     order_amount=50
+        #     order_amount=60
         # ))
 
         return orders
@@ -1179,8 +1179,16 @@ class Trade:
         current_price = state.maxamt_midprc
 
         orders = []
-        orders.extend(Strategy.arb(state=state, fair_price=current_price))
-        # orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=0.1, order_amount=50))
+        # orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        # orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=0.1, order_amount=60))
+        orders.extend(Strategy.mm_glft(
+            state=state, 
+            fair_price=current_price, 
+            mu=0,
+            sigma=1.0, # was default 0.3959
+            gamma=0.1, # was 0.1 
+            order_amount=60
+        ))
 
         return orders
     
@@ -1190,8 +1198,16 @@ class Trade:
         current_price = state.maxamt_midprc
 
         orders = []
-        orders.extend(Strategy.arb(state=state, fair_price=current_price))
-        # orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=0.1, order_amount=50))
+        # orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        # orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=0.1, order_amount=100))
+        orders.extend(Strategy.mm_glft(
+            state=state, 
+            fair_price=current_price, 
+            mu=0,
+            sigma=0.5, # was default 0.3959
+            gamma=0.1, # was 0.1 
+            order_amount=100
+        ))
 
         return orders
     
