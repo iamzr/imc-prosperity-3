@@ -1203,9 +1203,9 @@ class Trade:
 
 class Trader:
 
-    # state_kelp = Status('KELP')
-    # state_resin = Status('RAINFOREST_RESIN')
-    # state_ink = Status('SQUID_INK')
+    state_kelp = Status('KELP')
+    state_resin = Status('RAINFOREST_RESIN')
+    state_ink = Status('SQUID_INK')
     state_croissants = Status('CROISSANTS')
     state_jams = Status('JAMS')
     state_djembes = Status('DJEMBES')
@@ -1218,14 +1218,14 @@ class Trader:
         result = {}
 
         # round 1
-        # result["KELP"] = Trade.kelp(self.state_kelp)
-        # result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
-        # result["SQUID_INK"] = Trade.ink(self.state_ink)
+        result["KELP"] = Trade.kelp(self.state_kelp)
+        result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
+        result["SQUID_INK"] = Trade.ink(self.state_ink)
 
         # round 2
-        # result["CROISSANTS"] = Trade.croissants(self.state_croissants)
-        # result["JAMS"] = Trade.jams(self.state_jams)
-        # result["DJEMBES"] = Trade.djembes(self.state_djembes)
+        result["CROISSANTS"] = Trade.croissants(self.state_croissants)
+        result["JAMS"] = Trade.jams(self.state_jams)
+        result["DJEMBES"] = Trade.djembes(self.state_djembes)
         result["PICNIC_BASKET1"] = Trade.basket1(state=self.state_basket1)
         result["PICNIC_BASKET2"] = Trade.basket2(state=self.state_basket2)
 
