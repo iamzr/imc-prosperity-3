@@ -1,23 +1,12 @@
 import json
-import pandas as pd
-from abc import ABC, abstractmethod
+import numpy as np
+import math
+from statistics import NormalDist
+from datamodel import *
 from typing import Any
 
-import jsonpickle
-
-from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
-
-# Product Aliases
-RAINFOREST_RESIN: Symbol = "RAINFOREST_RESIN"
-KELP: Symbol = "KELP"
-SQUID_INK: Symbol = "SQUID_INK"
-
-# Product Limits
-POSITION_LIMITS = {
-    RAINFOREST_RESIN: 50,
-    KELP: 50,
-    SQUID_INK: 50
-}
+INF = 1e9
+normalDist = NormalDist(0,1)
 
 
 class Logger:
@@ -47,8 +36,7 @@ class Logger:
         print(
             self.to_json(
                 [
-                    self.compress_state(state, self.truncate(
-                        state.traderData, max_item_length)),
+                    self.compress_state(state, self.truncate(state.traderData, max_item_length)),
                     self.compress_orders(orders),
                     conversions,
                     self.truncate(trader_data, max_item_length),
@@ -74,16 +62,14 @@ class Logger:
     def compress_listings(self, listings: dict[Symbol, Listing]) -> list[list[Any]]:
         compressed = []
         for listing in listings.values():
-            compressed.append(
-                [listing.symbol, listing.product, listing.denomination])
+            compressed.append([listing.symbol, listing.product, listing.denomination])
 
         return compressed
 
     def compress_order_depths(self, order_depths: dict[Symbol, OrderDepth]) -> dict[Symbol, list[Any]]:
         compressed = {}
         for symbol, order_depth in order_depths.items():
-            compressed[symbol] = [
-                order_depth.buy_orders, order_depth.sell_orders]
+            compressed[symbol] = [order_depth.buy_orders, order_depth.sell_orders]
 
         return compressed
 
@@ -139,289 +125,979 @@ class Logger:
 
 logger = Logger()
 
-# Helper functions
-def get_best_ask(state: TradingState, symbol: Symbol):
-    order_depth = state.order_depths.get(symbol)
 
-    if order_depth is None or len(order_depth.sell_orders) == 0:
-        return None, None
+class Status:
 
-    return list(order_depth.sell_orders.items())[0]
+    _position_limit = {
+        "KELP": 50,
+        "RAINFOREST_RESIN": 50,
+        "SQUID_INK": 50,
+    }
 
+    _state = None
 
-def get_best_bid(state: TradingState, symbol: Symbol):
-    order_depth = state.order_depths.get(symbol)
+    _realtime_position = {key:0 for key in _position_limit.keys()}
 
-    if order_depth is None or len(order_depth.buy_orders) == 0:
-        return None, None
+    _hist_order_depths = {
+        product:{
+            'bidprc1': [],
+            'bidamt1': [],
+            'bidprc2': [],
+            'bidamt2': [],
+            'bidprc3': [],
+            'bidamt3': [],
+            'askprc1': [],
+            'askamt1': [],
+            'askprc2': [],
+            'askamt2': [],
+            'askprc3': [],
+            'askamt3': [],
+        } for product in _position_limit.keys()
+    }
 
-    return list(order_depth.buy_orders.items())[0]
+    _hist_observation = {
+        'sunlight': [],
+        'humidity': [],
+        'transportFees': [],
+        'exportTariff': [],
+        'importTariff': [],
+        'bidPrice': [],
+        'askPrice': [],
+    }
 
+    _num_data = 0
 
-def get_mid_price(state: TradingState, symbol: Symbol):
-    best_ask, _ = get_best_ask(state, symbol)
-    best_bid, _ = get_best_bid(state, symbol)
+    def __init__(self, product: str) -> None:
+        """Initialize status object.
 
-    if best_ask and best_bid:
-        return (best_ask + best_bid) // 2
+        Args:
+            product (str): product
 
-    return None
+        """
+        self.product = product
 
-class Orders:
-    def __init__(self, state: TradingState) -> None:
-        self._orders: dict[Symbol, list[Order]] = {}
-        self._state = state
+    @classmethod
+    def cls_update(cls, state: TradingState) -> None:
+        """Update trading state.
 
-    def remaining_quantity(self, symbol: Symbol) -> int:
-        """The quantity of units of a symbol between the current orders and the position limit"""
-        remaining = POSITION_LIMITS[symbol] - self.get_current_quantity(symbol)
+        Args:
+            state (TradingState): trading state
 
-        return remaining if remaining > 0 else 0
-
-
-    def get_orders(self) -> dict[Symbol, list[Order]]:
-        return self._orders
-
-    def get_current_quantity(self, symbol: Symbol) -> int:
-        return self._state.position.get(
-            symbol, 0) + sum(order.quantity for order in self._orders.get(symbol, []))
-
-    def add_order(self, symbol: Symbol, price: int, quantity: int) -> None:
-        if quantity == 0:
-            logger.print(f"ERROR: No quantity provided.")
-            # TODO raise error
-            return
-
-        if price < 0:
-            logger.print(f"ERROR: invalid price {price} provided.")
-            return
-
-        BUY_SELL = "BUY" if quantity > 0 else "SELL"
-
-        # We want to prevent the orders being sent exceeding the position limit.
-        limit = POSITION_LIMITS[symbol]
-
-        next_position = self.get_current_quantity(symbol) + quantity
-
-        if -limit > next_position or next_position > limit:
-            # TODO raise error
-            logger.print(
-                f"ERROR: Position Limit will be exceeded if the current order is added in addition to orders in queue.")
-            return
-
-        logger.print(f"Added order {BUY_SELL} {quantity} at {price}")
-        order = Order(symbol, price, quantity)
-        self._orders.setdefault(symbol, []).append(order)
-
-
-class Strategy(ABC):
-    def run(self, state: TradingState, orders: Orders, trader_data):
-        self._run(state, orders, trader_data)
-
-    @abstractmethod
-    def _run(self, state: TradingState, orders: Orders, trader_data):
-        raise NotImplementedError()
-
-class DummyStrategy(Strategy):
-    def _run(self, state: TradingState, orders: Orders, trader_data):
-        for product in state.order_depths:
-            acceptable_price = 100  # Participant should calculate this value
-            logger.print("Acceptable price : " + str(acceptable_price))
-            best_ask, best_ask_amount=get_best_ask(state, product)
-
-            if best_ask_amount is not None:
-                if int(best_ask) < acceptable_price:
-                    orders.add_order(product, best_ask, -best_ask)
-
-            best_bid, best_bid_amount=get_best_bid(state, product)
-
-            if best_bid_amount is not None:
-                if int(best_bid) > acceptable_price:
-                    orders.add_order(product, best_bid, -best_bid_amount)
-
-
-class AcceptablePriceStrategy(Strategy):
-    """
-    Buys and sell product based on an acceptable price.
-    """
-
-    def __init__(self,
-                 product: Symbol,
-                 acceptable_bid_price: int,
-                 acceptable_ask_price: int,
-                 best_only: bool = True) -> None:
-
-        self._product = product
-        self._acceptable_bid_price = acceptable_bid_price
-        self._acceptable_ask_price = acceptable_ask_price
-        self._best_only = best_only
-
-    def _run(self, state: TradingState, orders: Orders, trader_data):
-        order_depth = state.order_depths.get(self._product)
-
-        if order_depth is None:
-            return
-
-        if len(order_depth.sell_orders) != 0:
-            for ask, amount in order_depth.sell_orders.items():
-                if int(ask) < self._acceptable_ask_price:
-                    orders.add_order(self._product, ask, -amount)
-
-                if self._best_only:
+        """
+        # Update TradingState
+        cls._state = state
+        # Update realtime position
+        for product, posit in state.position.items():
+            cls._realtime_position[product] = posit
+        # Update historical order_depths
+        for product, orderdepth in state.order_depths.items():
+            cnt = 1
+            for prc, amt in sorted(orderdepth.sell_orders.items(), reverse=False):
+                cls._hist_order_depths[product][f'askamt{cnt}'].append(amt)
+                cls._hist_order_depths[product][f'askprc{cnt}'].append(prc)
+                cnt += 1
+                if cnt == 4:
                     break
-
-        if len(order_depth.buy_orders) != 0:
-            for bid, amount in order_depth.buy_orders.items():
-                if int(bid) > self._acceptable_bid_price:
-                    orders.add_order(self._product, bid, -amount)
-
-                if self._best_only:
+            while cnt < 4:
+                cls._hist_order_depths[product][f'askprc{cnt}'].append(np.nan)
+                cls._hist_order_depths[product][f'askamt{cnt}'].append(np.nan)
+                cnt += 1
+            cnt = 1
+            for prc, amt in sorted(orderdepth.buy_orders.items(), reverse=True):
+                cls._hist_order_depths[product][f'bidprc{cnt}'].append(prc)
+                cls._hist_order_depths[product][f'bidamt{cnt}'].append(amt)
+                cnt += 1
+                if cnt == 4:
                     break
+            while cnt < 4:
+                cls._hist_order_depths[product][f'bidprc{cnt}'].append(np.nan)
+                cls._hist_order_depths[product][f'bidamt{cnt}'].append(np.nan)
+                cnt += 1
+        cls._num_data += 1
+        
+        # cls._hist_observation['sunlight'].append(state.observations.conversionObservations['ORCHIDS'].sunlight)
+        # cls._hist_observation['humidity'].append(state.observations.conversionObservations['ORCHIDS'].humidity)
+        # cls._hist_observation['transportFees'].append(state.observations.conversionObservations['ORCHIDS'].transportFees)
+        # cls._hist_observation['exportTariff'].append(state.observations.conversionObservations['ORCHIDS'].exportTariff)
+        # cls._hist_observation['importTariff'].append(state.observations.conversionObservations['ORCHIDS'].importTariff)
+        # cls._hist_observation['bidPrice'].append(state.observations.conversionObservations['ORCHIDS'].bidPrice)
+        # cls._hist_observation['askPrice'].append(state.observations.conversionObservations['ORCHIDS'].askPrice)
 
-def _ema(price_history: list[float], span: int) -> int:
-    """
-    Method to calculate exponential moving average.
+    def hist_order_depth(self, type: str, depth: int, size) -> np.ndarray:
+        """Return historical order depth.
 
-    :param span: the number of periods for the ema.
-    """
-    data_series = pd.Series(price_history[-span:])
-    return int(data_series.ewm(span=span, adjust=False).mean().tail(1))
+        Args:
+            type (str): 'bidprc' or 'bidamt' or 'askprc' or 'askamt'
+            depth (int): depth, 1 or 2 or 3
+            size (int): size of data
+
+        Returns:
+            np.ndarray: historical order depth for given type and depth
+
+        """
+        return np.array(self._hist_order_depths[self.product][f'{type}{depth}'][-size:], dtype=np.float32)
+    
+    @property
+    def timestep(self) -> int:
+        return self._state.timestamp / 100
+
+    @property
+    def position_limit(self) -> int:
+        """Return position limit of product.
+
+        Returns:
+            int: position limit of product
+
+        """
+        return self._position_limit[self.product]
+
+    @property
+    def position(self) -> int:
+        """Return current position of product.
+
+        Returns:
+            int: current position of product
+
+        """
+        if self.product in self._state.position:
+            return int(self._state.position[self.product])
+        else:
+            return 0
+    
+    @property
+    def rt_position(self) -> int:
+        """Return realtime position.
+
+        Returns:
+            int: realtime position
+
+        """
+        return self._realtime_position[self.product]
+
+    def _cls_rt_position_update(cls, product, new_position):
+        if abs(new_position) <= cls._position_limit[product]:
+            cls._realtime_position[product] = new_position
+        else:
+            raise ValueError("New position exceeds position limit")
+
+    def rt_position_update(self, new_position: int) -> None:
+        """Update realtime position.
+
+        Args:
+            new_position (int): new position
+
+        """
+        self._cls_rt_position_update(self.product, new_position)
+    
+    @property
+    def bids(self) -> list[tuple[int, int]]:
+        """Return bid orders.
+
+        Returns:
+            dict[int, int].items(): bid orders (prc, amt)
+
+        """
+        return list(self._state.order_depths[self.product].buy_orders.items())
+    
+    @property
+    def asks(self) -> list[tuple[int, int]]:
+        """Return ask orders.
+
+        Returns:
+            dict[int, int].items(): ask orders (prc, amt)
+
+        """
+        return list(self._state.order_depths[self.product].sell_orders.items())
+    
+    @classmethod
+    def _cls_update_bids(cls, product, prc, new_amt):
+        if new_amt > 0:
+            cls._state.order_depths[product].buy_orders[prc] = new_amt
+        elif new_amt == 0:
+            cls._state.order_depths[product].buy_orders[prc] = 0
+        # else:
+        #     raise ValueError("Negative amount in bid orders")
+
+    @classmethod
+    def _cls_update_asks(cls, product, prc, new_amt):
+        if new_amt < 0:
+            cls._state.order_depths[product].sell_orders[prc] = new_amt
+        elif new_amt == 0:
+            cls._state.order_depths[product].sell_orders[prc] = 0
+        # else:
+        #     raise ValueError("Positive amount in ask orders")
+        
+    def update_bids(self, prc: int, new_amt: int) -> None:
+        """Update bid orders.
+
+        Args:
+            prc (int): price
+            new_amt (int): new amount
+
+        """
+        self._cls_update_bids(self.product, prc, new_amt)
+    
+    def update_asks(self, prc: int, new_amt: int) -> None:
+        """Update ask orders.
+
+        Args:
+            prc (int): price
+            new_amt (int): new amount
+
+        """
+        self._cls_update_asks(self.product, prc, new_amt)
+
+    @property
+    def possible_buy_amt(self) -> int:
+        """Return possible buy amount.
+
+        Returns:
+            int: possible buy amount
+        
+        """
+        possible_buy_amount1 = self._position_limit[self.product] - self.rt_position
+        possible_buy_amount2 = self._position_limit[self.product] - self.position
+        return min(possible_buy_amount1, possible_buy_amount2)
+        
+    @property
+    def possible_sell_amt(self) -> int:
+        """Return possible sell amount.
+
+        Returns:
+            int: possible sell amount
+        
+        """
+        possible_sell_amount1 = self._position_limit[self.product] + self.rt_position
+        possible_sell_amount2 = self._position_limit[self.product] + self.position
+        return min(possible_sell_amount1, possible_sell_amount2)
+
+    def hist_mid_prc(self, size:int) -> np.ndarray:
+        """Return historical mid price.
+
+        Args:
+            size (int): size of data
+
+        Returns:
+            np.ndarray: historical mid price
+        
+        """
+        return (self.hist_order_depth('bidprc', 1, size) + self.hist_order_depth('askprc', 1, size)) / 2
+    
+    def hist_maxamt_askprc(self, size:int) -> np.ndarray:
+        """Return price of ask order with maximum amount in historical order depth.
+
+        Args:
+            size (int): size of data
+
+        Returns:
+            int: price of ask order with maximum amount in historical order depth
+        
+        """
+        res_array = np.empty(size)
+        prc_array = np.array([self.hist_order_depth('askprc', 1, size), self.hist_order_depth('askprc', 2, size), self.hist_order_depth('askprc', 3, size)]).T
+        amt_array = np.array([self.hist_order_depth('askamt', 1, size), self.hist_order_depth('askamt', 2, size), self.hist_order_depth('askamt', 3, size)]).T
+
+        for i, amt_arr in enumerate(amt_array):
+            res_array[i] = prc_array[i,np.nanargmax(amt_arr)]
+
+        return res_array
+
+    def hist_maxamt_bidprc(self, size:int) -> np.ndarray:
+        """Return price of ask order with maximum amount in historical order depth.
+
+        Args:
+            size (int): size of data
+
+        Returns:
+            int: price of ask order with maximum amount in historical order depth
+        
+        """
+        res_array = np.empty(size)
+        prc_array = np.array([self.hist_order_depth('bidprc', 1, size), self.hist_order_depth('bidprc', 2, size), self.hist_order_depth('bidprc', 3, size)]).T
+        amt_array = np.array([self.hist_order_depth('bidamt', 1, size), self.hist_order_depth('bidamt', 2, size), self.hist_order_depth('bidamt', 3, size)]).T
+
+        for i, amt_arr in enumerate(amt_array):
+            res_array[i] = prc_array[i,np.nanargmax(amt_arr)]
+
+        return res_array
+    
+    def hist_vwap_all(self, size:int) -> np.ndarray:
+        res_array = np.zeros(size)
+        volsum_array = np.zeros(size)
+        for i in range(1,4):
+            tmp_bid_vol = self.hist_order_depth(f'bidamt', i, size)
+            tmp_ask_vol = self.hist_order_depth(f'askamt', i, size)
+            tmp_bid_prc = self.hist_order_depth(f'bidprc', i, size)
+            tmp_ask_prc = self.hist_order_depth(f'askprc', i, size)
+            if i == 0:
+                res_array = res_array + (tmp_bid_prc*tmp_bid_vol) + (-tmp_ask_prc*tmp_ask_vol)
+                volsum_array = volsum_array + tmp_bid_vol - tmp_ask_vol
+            else:
+                bid_nan_idx = np.isnan(tmp_bid_prc)
+                ask_nan_idx = np.isnan(tmp_ask_prc)
+                res_array = res_array + np.where(bid_nan_idx, 0, tmp_bid_prc*tmp_bid_vol) + np.where(ask_nan_idx, 0, -tmp_ask_prc*tmp_ask_vol)
+                volsum_array = volsum_array + np.where(bid_nan_idx, 0, tmp_bid_vol) - np.where(ask_nan_idx, 0, tmp_ask_vol)
+                
+        return res_array / volsum_array
+    
+    def hist_obs_humidity(self, size:int) -> np.ndarray:
+        return np.array(self._hist_observation['humidity'][-size:], dtype=np.float32)
+    
+    def hist_obs_sunlight(self, size:int) -> np.ndarray:
+        return np.array(self._hist_observation['sunlight'][-size:], dtype=np.float32)
+    
+    def hist_obs_transportFees(self, size:int) -> np.ndarray:
+        return np.array(self._hist_observation['transportFees'][-size:], dtype=np.float32)
+    
+    def hist_obs_exportTariff(self, size:int) -> np.ndarray:
+        return np.array(self._hist_observation['exportTariff'][-size:], dtype=np.float32)
+    
+    def hist_obs_importTariff(self, size:int) -> np.ndarray:
+        return np.array(self._hist_observation['importTariff'][-size:], dtype=np.float32)
+    
+    def hist_obs_bidPrice(self, size:int) -> np.ndarray:
+        return np.array(self._hist_observation['bidPrice'][-size:], dtype=np.float32)
+    
+    def hist_obs_askPrice(self, size:int) -> np.ndarray:
+        return np.array(self._hist_observation['askPrice'][-size:], dtype=np.float32)
+
+    @property
+    def best_bid(self) -> int:
+        """Return best bid price and amount.
+
+        Returns:
+            tuple[int, int]: (price, amount)
+        
+        """
+        buy_orders = self._state.order_depths[self.product].buy_orders
+        if len(buy_orders) > 0:
+            return max(buy_orders.keys())
+        else:
+            return self.best_ask - 1
+
+    @property
+    def best_ask(self) -> int:
+        sell_orders = self._state.order_depths[self.product].sell_orders
+        if len(sell_orders) > 0:
+            return min(sell_orders.keys())
+        else:
+            return self.best_bid + 1
+
+    @property
+    def mid(self) -> float:
+        return (self.best_bid + self.best_ask) / 2
+    
+    @property
+    def bid_ask_spread(self) -> int:
+        return self.best_ask - self.best_bid
+
+    @property
+    def best_bid_amount(self) -> int:
+        """Return best bid price and amount.
+
+        Returns:
+            tuple[int, int]: (price, amount)
+        
+        """
+        best_prc = max(self._state.order_depths[self.product].buy_orders.keys())
+        best_amt = self._state.order_depths[self.product].buy_orders[best_prc]
+        return best_amt
+        
+    @property
+    def best_ask_amount(self) -> int:
+        """Return best ask price and amount.
+
+        Returns:
+            tuple[int, int]: (price, amount)
+        
+        """
+        best_prc = min(self._state.order_depths[self.product].sell_orders.keys())
+        best_amt = self._state.order_depths[self.product].sell_orders[best_prc]
+        return -best_amt
+    
+    @property
+    def worst_bid(self) -> int:
+        buy_orders = self._state.order_depths[self.product].buy_orders
+        if len(buy_orders) > 0:
+            return min(buy_orders.keys())
+        else:
+            return self.best_ask - 1
+
+    @property
+    def worst_ask(self) -> int:
+        sell_orders = self._state.order_depths[self.product].sell_orders
+        if len(sell_orders) > 0:
+            return max(sell_orders.keys())
+        else:
+            return self.best_bid + 1
+
+    @property
+    def vwap(self) -> float:
+        vwap = 0
+        total_amt = 0
+
+        for prc, amt in self._state.order_depths[self.product].buy_orders.items():
+            vwap += (prc * amt)
+            total_amt += amt
+
+        for prc, amt in self._state.order_depths[self.product].sell_orders.items():
+            vwap += (prc * abs(amt))
+            total_amt += abs(amt)
+
+        vwap /= total_amt
+        return vwap
+
+    @property
+    def vwap_bidprc(self) -> float:
+        """Return volume weighted average price of bid orders.
+
+        Returns:
+            float: volume weighted average price of bid orders
+
+        """
+        vwap = 0
+        for prc, amt in self._state.order_depths[self.product].buy_orders.items():
+            vwap += (prc * amt)
+        vwap /= sum(self._state.order_depths[self.product].buy_orders.values())
+        return vwap
+    
+    @property
+    def vwap_askprc(self) -> float:
+        """Return volume weighted average price of ask orders.
+
+        Returns:
+            float: volume weighted average price of ask orders
+
+        """
+        vwap = 0
+        for prc, amt in self._state.order_depths[self.product].sell_orders.items():
+            vwap += (prc * -amt)
+        vwap /= -sum(self._state.order_depths[self.product].sell_orders.values())
+        return vwap
+
+    @property
+    def maxamt_bidprc(self) -> int:
+        """Return price of bid order with maximum amount.
+        
+        Returns:
+            int: price of bid order with maximum amount
+
+        """
+        prc_max_mat, max_amt = 0,0
+        for prc, amt in self._state.order_depths[self.product].buy_orders.items():
+            if amt > max_amt:
+                max_amt = amt
+                prc_max_mat = prc
+
+        return prc_max_mat
+    
+    @property
+    def maxamt_askprc(self) -> int:
+        """Return price of ask order with maximum amount.
+
+        Returns:
+            int: price of ask order with maximum amount
+        
+        """
+        prc_max_mat, max_amt = 0,0
+        for prc, amt in self._state.order_depths[self.product].sell_orders.items():
+            if amt < max_amt:
+                max_amt = amt
+                prc_max_mat = prc
+
+        return prc_max_mat
+    
+    @property
+    def maxamt_midprc(self) -> float:
+        return (self.maxamt_bidprc + self.maxamt_askprc) / 2
+
+    def bidamt(self, price) -> int:
+        order_depth = self._state.order_depths[self.product].buy_orders
+        if price in order_depth.keys():
+            return order_depth[price]
+        else:
+            return 0
+        
+    def askamt(self, price) -> int:
+        order_depth = self._state.order_depths[self.product].sell_orders
+        if price in order_depth.keys():
+            return order_depth[price]
+        else:
+            return 0
+
+    @property
+    def total_bidamt(self) -> int:
+        return sum(self._state.order_depths[self.product].buy_orders.values())
+
+    @property
+    def total_askamt(self) -> int:
+        return -sum(self._state.order_depths[self.product].sell_orders.values())
+
+    @property
+    def orchid_south_bidprc(self) -> float:
+        return self._state.observations.conversionObservations[self.product].bidPrice
+    
+    @property
+    def orchid_south_askprc(self) -> float:
+        return self._state.observations.conversionObservations[self.product].askPrice
+    
+    @property
+    def orchid_south_midprc(self) -> float:
+        return (self.orchid_south_bidprc + self.orchid_south_askprc) / 2
+    
+    @property
+    def stoarageFees(self) -> float:
+        return 0.1
+    
+    @property
+    def transportFees(self) -> float:
+        return self._state.observations.conversionObservations[self.product].transportFees
+    
+    @property
+    def exportTariff(self) -> float:
+        return self._state.observations.conversionObservations[self.product].exportTariff
+    
+    @property
+    def importTariff(self) -> float:
+        return self._state.observations.conversionObservations[self.product].importTariff
+    
+    @property
+    def sunlight(self) -> float:
+        return self._state.observations.conversionObservations[self.product].sunlight
+    
+    @property
+    def humidity(self) -> float:
+        return self._state.observations.conversionObservations[self.product].humidity
+
+    @property
+    def market_trades(self) -> list:
+        return self._state.market_trades.get(self.product, [])
 
 
-def ema(state, trader_data, product: Symbol, span: int) -> int | None:
-    key = f"{product}_PRICES"
+def linear_regression(X, y):
+    X_bias = np.c_[np.ones((X.shape[0], 1)), X]
+    theta = np.linalg.inv(X_bias.T.dot(X_bias)).dot(X_bias.T).dot(y)
+    return theta
 
-    price = _ema(trader_data[key], span) if trader_data.get(key) else None
+def cal_tau(day, timestep, T=1):
+    return T - ((day - 1) * 20000 + timestep) * 2e-7
 
-    mid_price = get_mid_price(state, product)
-    prices = trader_data.setdefault(key, [])
+def cal_call(S, tau, sigma=0.16, r=0, K=10000):
+    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * tau) / (sigma * math.sqrt(tau))
+    delta = normalDist.cdf(d1)
+    d2 = d1 - sigma * np.sqrt(tau)
+    call_price = S * delta - K * math.exp(-r * tau) * normalDist.cdf(d2)
+    return call_price, delta
 
-    if len(prices) > span:
-        prices.pop(0)
+def cal_imvol(market_price, S, tau, r=0, K=10000, tol=1e-6, max_iter=100):
+    sigma = 0.16
+    diff = cal_call(S, tau, sigma)[0] - market_price
 
-    prices.append(mid_price)
-
-    return price
-
-
-class AcceptablePriceWithEmaStrategy(Strategy):
-    def __init__(self, product: Symbol, span: int, best_only: bool = True) -> None:
-        self._product = product
-        self._span = span
-        self._best_only = best_only
-
-    def _run(self, state: TradingState, orders: Orders, trader_data):
-        price = ema(state, trader_data, self._product, self._span)
-        if price is None:
-            return
-
-        s = AcceptablePriceStrategy(product=self._product,
-                                    acceptable_ask_price=price, acceptable_bid_price=price, best_only=self._best_only)
-        s.run(state, orders, trader_data)
+    iter_count = 0
+    while np.any(np.abs(diff) > tol) and iter_count < max_iter:
+        vega = (cal_call(S, tau, sigma+tol)[0] - cal_call(S, tau, sigma)[0]) / tol
+        sigma -= diff / vega
+        diff = cal_call(S, tau, sigma)[0] - market_price
+        iter_count += 1
+    
+    return sigma
 
 
-def _sma(price_history: list[float], span: int) -> int:
-    """
-    Method to calculate exponential moving average.
+class ExecutionProb:
 
-    :param span: the number of periods for the ema.
-    """
-    data_series = pd.Series(price_history[-span:])
-    return int(data_series.rolling(window=span, min_periods=1).mean().tail(1))
-
-
-def sma(state, trader_data, product: Symbol, span: int) -> int | None:
-    key = f"{product}_PRICES"
-
-    price = _sma(trader_data[key], span) if trader_data.get(key) else None
-
-    mid_price = get_mid_price(state, product)
-    prices = trader_data.setdefault(key, [])
-
-    if len(prices) > span:
-        prices.pop(0)
-
-    prices.append(mid_price)
-
-    return price
+    @staticmethod
+    def orchids(delta):
+        if delta < -1:
+            return 0.571
+        elif delta > -0.5:
+            return 0
+        elif delta == -1.0:
+            return 0.2685
+        elif delta == -0.75:
+            return 0.2107
+        elif delta == -0.5:
+            return 0.1699
 
 
+class Strategy:
 
-class AcceptablePriceWithSmaStrategy(Strategy):
-    def __init__(self, state: TradingState, orders: Orders, product: Symbol, span: int, best_only: bool = True) -> None:
-        super().__init__(state, orders)
-        self._product = product
-        self._span = span
-        self._best_only = best_only
+    @staticmethod
+    def arb(state: Status, fair_price):
+        orders = []
 
-    def _run(self, state: TradingState, orders: Orders, trader_data):
-        price = sma(state, self._product, self._span)
-        if price is None:
-            return
+        for ask_price, ask_amount in state.asks:
+            if ask_price < fair_price:
+                buy_amount = min(-ask_amount, state.possible_buy_amt)
+                if buy_amount > 0:
+                    orders.append(Order(state.product, int(ask_price), int(buy_amount)))
+                    state.rt_position_update(state.rt_position + buy_amount)
+                    state.update_asks(ask_price, -(-ask_amount - buy_amount))
 
-        s = AcceptablePriceStrategy(product=self._product,
-                                    acceptable_ask_price=price, acceptable_bid_price=price, best_only=self._best_only)
-        s.run(state, orders, trader_data)
+            elif ask_price == fair_price:
+                if state.rt_position < 0:
+                    buy_amount = min(-ask_amount, -state.rt_position)
+                    orders.append(Order(state.product, int(ask_price), int(buy_amount)))
+                    state.rt_position_update(state.rt_position + buy_amount)
+                    state.update_asks(ask_price, -(-ask_amount - buy_amount))
 
-class MarketMaking(Strategy):
-    def __init__(self, symbol: Symbol, spread: int, quantity: int):
-        self._symbol = symbol
-        self._spread = spread
+        for bid_price, bid_amount in state.bids:
+            if bid_price > fair_price:
+                sell_amount = min(bid_amount, state.possible_sell_amt)
+                if sell_amount > 0:
+                    orders.append(Order(state.product, int(bid_price), -int(sell_amount)))
+                    state.rt_position_update(state.rt_position - sell_amount)
+                    state.update_bids(bid_price, bid_amount - sell_amount)
 
-        if quantity < 0:
-            quantity *= -1
+            elif bid_price == fair_price:
+                if state.rt_position > 0:
+                    sell_amount = min(bid_amount, state.rt_position)
+                    orders.append(Order(state.product, int(bid_price), -int(sell_amount)))
+                    state.rt_position_update(state.rt_position - sell_amount)
+                    state.update_bids(bid_price, bid_amount - sell_amount)
 
-        self._quantity = quantity
+        return orders
+
+    @staticmethod
+    def mm_glft(
+        state: Status,
+        fair_price,
+        mu=0,
+        sigma=0.3959,
+        gamma=1e-9,
+        order_amount=20,
+    ):
+        
+        q = state.rt_position / order_amount
+        #Q = state.position_limit / order_amount
+
+        kappa_b = 1 / max((fair_price - state.best_bid) - 1, 1)
+        kappa_a = 1 / max((state.best_ask - fair_price) - 1, 1)
+
+        A_b = 0.25
+        A_a = 0.25
+
+        delta_b = 1 / gamma * math.log(1 + gamma / kappa_b) + (-mu / (gamma * sigma**2) + (2 * q + 1) / 2) * math.sqrt((sigma**2 * gamma) / (2 * kappa_b * A_b) * (1 + gamma / kappa_b)**(1 + kappa_b / gamma))
+        delta_a = 1 / gamma * math.log(1 + gamma / kappa_a) + (mu / (gamma * sigma**2) - (2 * q - 1) / 2) * math.sqrt((sigma**2 * gamma) / (2 * kappa_a * A_a) * (1 + gamma / kappa_a)**(1 + kappa_a / gamma))
+
+        p_b = round(fair_price - delta_b)
+        p_a = round(fair_price + delta_a)
+
+        p_b = min(p_b, fair_price) # Set the buy price to be no higher than the fair price to avoid losses
+        p_b = min(p_b, state.best_bid + 1) # Place the buy order as close as possible to the best bid price
+        p_b = max(p_b, state.maxamt_bidprc + 1) # No market order arrival beyond this price
+
+        p_a = max(p_a, fair_price)
+        p_a = max(p_a, state.best_ask - 1)
+        p_a = min(p_a, state.maxamt_askprc - 1)
+
+        buy_amount = min(order_amount, state.possible_buy_amt)
+        sell_amount = min(order_amount, state.possible_sell_amt)
+
+        orders = []
+        if buy_amount > 0:
+            orders.append(Order(state.product, int(p_b), int(buy_amount)))
+        if sell_amount > 0:
+            orders.append(Order(state.product, int(p_a), -int(sell_amount)))
+        return orders
+
+    @staticmethod
+    def mm_ou(
+        state: Status,
+        fair_price,
+        gamma=1e-9,
+        order_amount=20,
+    ):
+
+        q = state.rt_position / order_amount
+        Q = state.position_limit / order_amount
+
+        kappa_b = 1 / max((fair_price - state.best_bid) - 1, 1)
+        kappa_a = 1 / max((state.best_ask - fair_price) - 1, 1)
+            
+        vfucn = lambda q,Q: -INF if (q==Q+1 or q==-(Q+1)) else math.log(math.sin(((q+Q+1)*math.pi)/(2*Q+2)))
+
+        delta_b = 1 / gamma * math.log(1 + gamma / kappa_b) - 1 / kappa_b * (vfucn(q + 1, Q) - vfucn(q, Q))
+        delta_a = 1 / gamma * math.log(1 + gamma / kappa_a) + 1 / kappa_a * (vfucn(q, Q) - vfucn(q - 1, Q))
+
+        p_b = round(fair_price - delta_b)
+        p_a = round(fair_price + delta_a)
+
+        p_b = min(p_b, fair_price) # Set the buy price to be no higher than the fair price to avoid losses
+        p_b = min(p_b, state.best_bid + 1) # Place the buy order as close as possible to the best bid price
+        p_b = max(p_b, state.maxamt_bidprc + 1) # No market order arrival beyond this price
+
+        p_a = max(p_a, fair_price)
+        p_a = max(p_a, state.best_ask - 1)
+        p_a = min(p_a, state.maxamt_askprc - 1)
+
+        buy_amount = min(order_amount, state.possible_buy_amt)
+        sell_amount = min(order_amount, state.possible_sell_amt)
+
+        orders = []
+        if buy_amount > 0:
+            orders.append(Order(state.product, int(p_b), int(buy_amount)))
+        if sell_amount > 0:
+            orders.append(Order(state.product, int(p_a), -int(sell_amount)))
+        return orders
+
+    @staticmethod
+    def exchange_arb(state: Status, fair_price, next_price_move=0):
+        cost = state.transportFees + state.importTariff
+
+        my_ask = state.maxamt_bidprc
+        ask_max_expected_profit = 0
+        optimal_my_ask = INF
+        while my_ask < fair_price:
+            delta = my_ask - fair_price
+            execution_prob = ExecutionProb.orchids(delta)
+
+            if my_ask > state.best_bid:
+                trading_profit = my_ask - (state.orchid_south_askprc + next_price_move)
+                expected_profit = execution_prob * (trading_profit - cost)
+             
+            else:
+                execution_prob_list = []
+                price_list = []
+                amount_list = []
+
+                for price, amount in state.bids:
+                    if price >= my_ask:
+                        execution_prob_list.append(1)
+                        price_list.append(price)
+                        amount_list.append(amount)
+
+                total_amount = np.sum(amount_list)
+                if total_amount < state.position_limit:
+                    execution_prob_list.append(ExecutionProb.orchids(delta))
+                    price_list.append(my_ask)
+                    amount_list.append(state.position_limit - total_amount)
+
+                trading_profit_list = np.array(price_list) - (state.orchid_south_askprc + next_price_move)
+                expected_profit = (np.array(execution_prob_list) * (np.array(trading_profit_list) - cost) * np.array(amount_list) / state.position_limit).sum()
+
+            if expected_profit > ask_max_expected_profit:
+                optimal_my_ask = my_ask
+                ask_max_expected_profit = expected_profit
+            
+            my_ask += 1
 
 
-    def _get_prices(self, state) -> [int, int]:
-        mid_price = get_mid_price(state, self._symbol)
+        cost = state.transportFees + state.exportTariff + state.stoarageFees
 
-        if self._spread > mid_price:
-            return None, None
+        my_bid = state.maxamt_askprc
+        bid_max_expected_profit = 0
+        optimal_my_bid = 1
+        while my_bid > fair_price:
+            delta = fair_price - my_bid
+            execution_prob = ExecutionProb.orchids(delta)
 
-        if mid_price:
-            return (mid_price - self._spread) // 2, (mid_price + self._spread) // 2
+            if my_bid < state.best_ask:
+                trading_profit = (state.orchid_south_bidprc + next_price_move) - my_bid
+                expected_profit = execution_prob * (trading_profit - cost)
+             
+            else:
+                execution_prob_list = []
+                price_list = []
+                amount_list = []
 
-        return None, None
+                for price, amount in state.asks:
+                    if price <= my_bid:
+                        execution_prob_list.append(1)
+                        price_list.append(price)
+                        amount_list.append(abs(amount))
 
-    def _run(self, state: TradingState, orders: Orders, trader_data):
-        bid_price, ask_price = self._get_prices(state)
+                total_amount = np.sum(amount_list)
+                if total_amount < state.position_limit:
+                    execution_prob_list.append(ExecutionProb.orchids(delta))
+                    price_list.append(my_bid)
+                    amount_list.append(state.position_limit - total_amount)
 
-        if bid_price is None and ask_price is None:
-            return
+                trading_profit_list = (state.orchid_south_bidprc + next_price_move) - np.array(price_list)
+                expected_profit = (np.array(execution_prob_list) * (np.array(trading_profit_list) - cost) * np.array(amount_list) / state.position_limit).sum()
 
-        orders.add_order(self._symbol, bid_price, self._quantity)
-        orders.add_order(self._symbol, ask_price, -self._quantity)
+            if expected_profit > bid_max_expected_profit:
+                optimal_my_bid = my_bid
+                bid_max_expected_profit = expected_profit
+            
+            my_bid -= 1
+            
+
+        orders = []
+        
+        if ask_max_expected_profit >= bid_max_expected_profit and ask_max_expected_profit > 0:
+            orders.append(Order(state.product, int(optimal_my_ask), -int(state.position_limit)))
+        elif bid_max_expected_profit > ask_max_expected_profit and bid_max_expected_profit > 0:
+            orders.append(Order(state.product, int(optimal_my_bid), int(state.position_limit)))
+        
+        return orders
+
+    @staticmethod
+    def convert(state: Status):
+        if state.position < 0:
+            return -state.position
+        elif state.position > 0:
+            return -state.position
+        else:
+            return 0
+        
+    @staticmethod
+    def index_arb(
+        basket: Status,
+        chocolate: Status,
+        strawberries: Status,
+        roses: Status,
+        theta=380,
+        threshold=30,
+    ):
+        
+        basket_prc = basket.mid
+        underlying_prc = 4 * chocolate.vwap + 6 * strawberries.vwap + 1 * roses.vwap
+        spread = basket_prc - underlying_prc
+        norm_spread = spread - theta
+
+        orders = []
+        if norm_spread > threshold:
+            orders.append(Order(basket.product, int(basket.worst_bid), -int(basket.possible_sell_amt)))
+        elif norm_spread < -threshold:
+            orders.append(Order(basket.product, int(basket.worst_ask), int(basket.possible_buy_amt)))
+
+        return orders
+    
+    @staticmethod
+    def vol_arb(option: Status, iv, hv=0.16, threshold=0.00178):
+
+        vol_spread = iv - hv
+
+        orders = []
+
+        if vol_spread > threshold:
+            sell_amount = option.possible_sell_amt
+            orders.append(Order(option.product, option.worst_bid, -sell_amount))
+            executed_amount = min(sell_amount, option.total_bidamt)
+            option.rt_position_update(option.rt_position - executed_amount)
+
+        elif vol_spread < -threshold:
+            buy_amount = option.possible_buy_amt
+            orders.append(Order(option.product, option.worst_ask, buy_amount))
+            executed_amount = min(buy_amount, option.total_askamt)
+            option.rt_position_update(option.rt_position + executed_amount)
+
+        return orders
+    
+    @staticmethod
+    def delta_hedge(underlying: Status, option: Status, delta, rebalance_threshold=30):
+
+        target_position = -round(option.rt_position * delta)
+        current_position = underlying.position
+        position_diff = target_position - current_position
+
+        orders = []
+
+        if underlying.bid_ask_spread == 1 and abs(position_diff) > rebalance_threshold:
+
+            if position_diff < 0:
+                sell_amount = min(abs(position_diff), underlying.possible_sell_amt)
+                orders.append(Order(underlying.product, underlying.best_bid, -sell_amount))
+
+            elif position_diff > 0:
+                buy_amount = min(position_diff, underlying.possible_buy_amt)
+                orders.append(Order(underlying.product, underlying.best_ask, buy_amount))
+        
+        return orders
+    
+    @staticmethod
+    def insider_trading(signal_product: Status, trade_product: Status):
+
+        buy_timestamp, sell_timestamp = 0, 0
+
+        for trade in signal_product.market_trades:
+            if trade.buyer == "Rhianna":
+                buy_timestamp = trade.timestamp
+            elif trade.seller == "Rhianna":
+                sell_timestamp = trade.timestamp
+
+        orders = []
+        if buy_timestamp > sell_timestamp:
+            orders.append(Order(trade_product.product, trade_product.worst_ask, trade_product.possible_buy_amt))
+        elif buy_timestamp < sell_timestamp:
+            orders.append(Order(trade_product.product, trade_product.worst_bid, -trade_product.possible_sell_amt))
+
+        return orders
 
 
+class Trade:
+
+    @staticmethod   
+    def kelp(state: Status) -> list[Order]:
+
+        current_price = state.maxamt_midprc
+
+        orders = []
+        orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=0.1, order_amount=50))
+
+        return orders
+    
+    @staticmethod
+    def resin(state: Status) -> list[Order]:
+
+        current_price = state.maxamt_midprc
+
+        orders = []
+        orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        orders.extend(Strategy.mm_glft(
+            state=state, 
+            fair_price=current_price, 
+            mu=0,
+            sigma=2, # was default 0.3959
+            gamma=0.4, # I don't know what this does but changing it to 0.4 improved performance, was 0.1
+            order_amount=50
+        ))
+
+        return orders
+    
+    @staticmethod
+    def ink(state: Status) -> list[Order]:
+
+        current_price = state.maxamt_midprc
+
+        orders = []
+        orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        orders.extend(Strategy.mm_glft(
+            state=state, 
+            fair_price=current_price, 
+            mu=0,
+            sigma=1.5, # was default 0.3959
+            gamma=0.1, # was 0.1 
+            order_amount=50
+        ))
+
+        return orders
+    
+    @staticmethod
+    def convert(state: Status) -> int:
+        return Strategy.convert(state=state)
+    
+    
 
 class Trader:
-    def __init__(self):
-        self._strategies = [
-            # DummyStrategy(),
-            AcceptablePriceStrategy(RAINFOREST_RESIN, 10_000, 10_000),
-            AcceptablePriceWithEmaStrategy(KELP, 5),
-            # AcceptablePriceWithEmaStrategy(trader_data, SQUID_INK, 5),
-            MarketMaking(SQUID_INK, 10, 10),
-            # MarketMaking(SQUID_INK, 10, PRODUCT_LIMITS[SQUID_INK]),
 
-        ]
+    state_kelp = Status('KELP')
+    state_resin = Status('RAINFOREST_RESIN')
+    state_ink = Status('SQUID_INK')
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
-        logger.print("traderData: " + state.traderData)
-        logger.print("Observations: " + str(state.observations))
-        trader_data = jsonpickle.decode(state.traderData) if state.traderData else {}
+        Status.cls_update(state)
 
-        orders = Orders(state)
+        result = {}
 
-        # Run strategies
-        for strategy in self._strategies:
-            strategy.run(state, orders, trader_data)
-
-        trader_data = jsonpickle.encode(trader_data)
+        # round 1
+        result["KELP"] = Trade.kelp(self.state_kelp)
+        result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
+        result["SQUID_INK"] = Trade.ink(self.state_ink)
 
         conversions = 1
-        result = orders.get_orders()
-        logger.flush(state, result, conversions, trader_data)
-        return result, conversions, trader_data
+
+        traderData = "SAMPLE" 
+        logger.flush(state, result, conversions, traderData)
+        return result, conversions, traderData
