@@ -132,6 +132,11 @@ class Status:
         "KELP": 50,
         "RAINFOREST_RESIN": 50,
         "SQUID_INK": 50,
+        "CROISSANTS": 250,
+        "JAMS": 350,
+        "DJEMBES": 60,
+        "PICNIC_BASKET1": 60,
+        "PICNIC_BASKET2": 100,
     }
 
     _state = None
@@ -756,9 +761,49 @@ class Strategy:
                     state.update_bids(bid_price, bid_amount - sell_amount)
 
         return orders
+    
+    @staticmethod
+    def mm_Avellaneda_Stoikov( # James implemented this with help from ChatGPT. It's probably wrong...
+        # DO NOT TRUST THIS METHOD
+        state: Status,
+        fair_price,
+        sigma=0.3959,
+        gamma=1e-9,
+        order_amount=20,
+    ):
+        
+        # q = state.rt_position / order_amount
+        Q = state.position_limit / order_amount
+
+        kappa_b = 1 / max((fair_price - state.best_bid) - 1, 1)
+        kappa_a = 1 / max((state.best_ask - fair_price) - 1, 1)
+
+        delta_b = (sigma**2 * gamma) / (2 * kappa_b * Q) * (q + 1)
+        delta_a = (sigma**2 * gamma) / (2 * kappa_a * Q) * (q - 1)
+
+        p_b = round(fair_price - delta_b)
+        p_a = round(fair_price + delta_a)
+
+        p_b = min(p_b, fair_price) # Set the buy price to be no higher than the fair price to avoid losses
+        p_b = min(p_b, state.best_bid + 1) # Place the buy order as close as possible to the best bid price
+        p_b = max(p_b, state.maxamt_bidprc + 1) # No market order arrival beyond this price
+
+        p_a = max(p_a, fair_price)
+        p_a = max(p_a, state.best_ask - 1)
+        p_a = min(p_a, state.maxamt_askprc - 1)
+
+        buy_amount = min(order_amount, state.possible_buy_amt)
+        sell_amount = min(order_amount, state.possible_sell_amt)
+
+        orders = []
+        if buy_amount > 0:
+            orders.append(Order(state.product, int(p_b), int(buy_amount)))
+        if sell_amount > 0:
+            orders.append(Order(state.product, int(p_a), -int(sell_amount)))
+        return orders
 
     @staticmethod
-    def mm_glft(
+    def mm_glft( # Guéant–Lehalle–Fernandez-Tapia
         state: Status,
         fair_price,
         mu=0,
@@ -1075,6 +1120,98 @@ class Trade:
         return orders
     
     @staticmethod
+    def croissants(state: Status) -> list[Order]:
+
+        current_price = state.maxamt_midprc
+
+        orders = []
+        orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        # orders.extend(Strategy.mm_glft(
+        #     state=state, 
+        #     fair_price=current_price, 
+        #     mu=0,
+        #     sigma=1.5, # was default 0.3959
+        #     gamma=0.1, # was 0.1 
+        #     order_amount=250
+        # ))
+
+        return orders
+    
+    @staticmethod
+    def jams(state: Status) -> list[Order]:
+
+        current_price = state.maxamt_midprc
+
+        orders = []
+        orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        # orders.extend(Strategy.mm_glft(
+        #     state=state, 
+        #     fair_price=current_price, 
+        #     mu=0,
+        #     sigma=1.5, # was default 0.3959
+        #     gamma=0.1, # was 0.1 
+        #     order_amount=350
+        # ))
+
+        return orders
+    
+    @staticmethod
+    def djembes(state: Status) -> list[Order]:
+
+        current_price = state.maxamt_midprc
+
+        orders = []
+        orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        # orders.extend(Strategy.mm_glft(
+        #     state=state, 
+        #     fair_price=current_price, 
+        #     mu=0,
+        #     sigma=1.5, # was default 0.3959
+        #     gamma=0.1, # was 0.1 
+        #     order_amount=60
+        # ))
+
+        return orders
+
+    @staticmethod
+    def basket1(state: Status) -> list[Order]:
+
+        current_price = state.maxamt_midprc
+
+        orders = []
+        # orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        # orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=0.1, order_amount=60))
+        orders.extend(Strategy.mm_glft(
+            state=state, 
+            fair_price=current_price, 
+            mu=0,
+            sigma=1.0, # was default 0.3959
+            gamma=0.1, # was 0.1 
+            order_amount=60
+        ))
+
+        return orders
+    
+    @staticmethod
+    def basket2(state: Status) -> list[Order]:
+
+        current_price = state.maxamt_midprc
+
+        orders = []
+        # orders.extend(Strategy.arb(state=state, fair_price=current_price))
+        # orders.extend(Strategy.mm_ou(state=state, fair_price=current_price, gamma=0.1, order_amount=100))
+        orders.extend(Strategy.mm_glft(
+            state=state, 
+            fair_price=current_price, 
+            mu=0,
+            sigma=0.5, # was default 0.3959
+            gamma=0.1, # was 0.1 
+            order_amount=100
+        ))
+
+        return orders
+    
+    @staticmethod
     def convert(state: Status) -> int:
         return Strategy.convert(state=state)
     
@@ -1085,6 +1222,11 @@ class Trader:
     state_kelp = Status('KELP')
     state_resin = Status('RAINFOREST_RESIN')
     state_ink = Status('SQUID_INK')
+    state_croissants = Status('CROISSANTS')
+    state_jams = Status('JAMS')
+    state_djembes = Status('DJEMBES')
+    state_basket1 = Status('PICNIC_BASKET1')
+    state_basket2 = Status('PICNIC_BASKET2')
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
@@ -1095,6 +1237,13 @@ class Trader:
         result["KELP"] = Trade.kelp(self.state_kelp)
         result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         result["SQUID_INK"] = Trade.ink(self.state_ink)
+
+        # round 2
+        result["CROISSANTS"] = Trade.croissants(self.state_croissants)
+        result["JAMS"] = Trade.jams(self.state_jams)
+        result["DJEMBES"] = Trade.djembes(self.state_djembes)
+        result["PICNIC_BASKET1"] = Trade.basket1(state=self.state_basket1)
+        result["PICNIC_BASKET2"] = Trade.basket2(state=self.state_basket2)
 
         conversions = 1
 
