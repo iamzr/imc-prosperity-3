@@ -1482,9 +1482,9 @@ class Trader:
         # result["VOLCANIC_ROCK_VOUCHER_9750"] = Trade.
         # result["VOLCANIC_ROCK_VOUCHER_10000"] = Trade.
         # result["VOLCANIC_ROCK_VOUCHER_10250"] = Trade.
-        result[Products.VOLCANIC_ROCK_VOUCHER_10500] = volcanic_rock_result[
-            Products.VOLCANIC_ROCK_VOUCHER_10500
-        ]
+        # result[Products.VOLCANIC_ROCK_VOUCHER_10500] = volcanic_rock_result[
+        #     Products.VOLCANIC_ROCK_VOUCHER_10500
+        # ]
 
         conversions = 1
 
