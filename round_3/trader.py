@@ -10,21 +10,20 @@ INF = 1e9
 normalDist = NormalDist(0, 1)
 
 
-class Products(StrEnum):
-    KELP = "KELP"
-    RAINFOREST_RESIN = "RAINFOREST_RESIN"
-    SQUID_INK = "SQUID_INK"
-    CROISSANTS = "CROISSANTS"
-    JAMS = "JAMS"
-    DJEMBES = "DJEMBES"
-    PICNIC_BASKET1 = "PICNIC_BASKET1"
-    PICNIC_BASKET2 = "PICNIC_BASKET2"
-    VOLCANIC_ROCK = "VOLCANIC_ROCK"
-    VOLCANIC_ROCK_VOUCHER_9500 = "VOLCANIC_ROCK_VOUCHER_9500"
-    VOLCANIC_ROCK_VOUCHER_9750 = "VOLCANIC_ROCK_VOUCHER_9750"
-    VOLCANIC_ROCK_VOUCHER_10000 = "VOLCANIC_ROCK_VOUCHER_10000"
-    VOLCANIC_ROCK_VOUCHER_10250 = "VOLCANIC_ROCK_VOUCHER_10250"
-    VOLCANIC_ROCK_VOUCHER_10500 = "VOLCANIC_ROCK_VOUCHER_10500"
+KELP = "KELP"
+RAINFOREST_RESIN = "RAINFOREST_RESIN"
+SQUID_INK = "SQUID_INK"
+CROISSANTS = "CROISSANTS"
+JAMS = "JAMS"
+DJEMBES = "DJEMBES"
+PICNIC_BASKET1 = "PICNIC_BASKET1"
+PICNIC_BASKET2 = "PICNIC_BASKET2"
+VOLCANIC_ROCK = "VOLCANIC_ROCK"
+VOLCANIC_ROCK_VOUCHER_9500 = "VOLCANIC_ROCK_VOUCHER_9500"
+VOLCANIC_ROCK_VOUCHER_9750 = "VOLCANIC_ROCK_VOUCHER_9750"
+VOLCANIC_ROCK_VOUCHER_10000 = "VOLCANIC_ROCK_VOUCHER_10000"
+VOLCANIC_ROCK_VOUCHER_10250 = "VOLCANIC_ROCK_VOUCHER_10250"
+VOLCANIC_ROCK_VOUCHER_10500 = "VOLCANIC_ROCK_VOUCHER_10500"
 
 
 class Logger:
@@ -157,7 +156,7 @@ logger = Logger()
 class Status:
 
     _position_limit = {
-        Products.KELP: 50,
+        "KELP": 50,
         "RAINFOREST_RESIN": 50,
         "SQUID_INK": 50,
         "CROISSANTS": 250,
@@ -165,8 +164,8 @@ class Status:
         "DJEMBES": 60,
         "PICNIC_BASKET1": 60,
         "PICNIC_BASKET2": 100,
-        Products.VOLCANIC_ROCK: 400,
-        Products.VOLCANIC_ROCK_VOUCHER_9500: 200,
+        "VOLCANIC_ROCK": 400,
+        "VOLCANIC_ROCK_VOUCHER_9500": 200,
         "VOLCANIC_ROCK_VOUCHER_9750": 200,
         "VOLCANIC_ROCK_VOUCHER_10000": 200,
         "VOLCANIC_ROCK_VOUCHER_10250": 200,
@@ -774,11 +773,34 @@ def linear_regression(X, y):
     return theta
 
 
-def cal_tau(day, timestep, T=1):
-    return T - ((day - 1) * 20000 + timestep) * 2e-7
+def cal_tau(day, timestep, T=7) -> float:
+    """Calculate time to maturity
+
+    Args:
+        day: Current day
+        timestep: Current timestep
+        T: Time to maturity.
+
+    Returns:
+        _type_: _description_
+    """
+    return T - ((day - 1) * 750_000 + timestep) * 2e-7
 
 
-def cal_call(S, tau, sigma=0.16, r=0, K=10000):
+def cal_call(
+    S: int, tau: float, K, sigma: float = 0.16, r: float = 0.0
+) -> tuple[float, float]:
+    """Calculate option price
+
+    Args:
+        S (int): current stock price.
+        tau (int): time to maturity.
+        sigma (float): volatility of the underlying asset.
+        r (float): Risk-free interest rate. Defaults to 0.
+        K (int): Strike price
+    Returns:
+        Call price and delta
+    """
     d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * tau) / (sigma * math.sqrt(tau))
     delta = normalDist.cdf(d1)
     d2 = d1 - sigma * np.sqrt(tau)
@@ -786,7 +808,9 @@ def cal_call(S, tau, sigma=0.16, r=0, K=10000):
     return call_price, delta
 
 
-def cal_imvol(market_price, S, tau, r=0, K=10000, tol=1e-6, max_iter=100):
+def calculate_implied_volatility(
+    market_price, S, tau, r=0, K=10000, tol=1e-6, max_iter=100
+):
     sigma = 0.16
     diff = cal_call(S, tau, sigma)[0] - market_price
 
@@ -1410,49 +1434,55 @@ class Trade:
         return Strategy.convert(state=state)
 
     @staticmethod
-    def volcanic_rock(
+    def volcanic_rock_voucher(
         underlying: Status, option: Status, day: int, strike_price: int
     ) -> dict[str, list[Order]]:
 
-        result = {option.product: [], underlying.product: []}
+        result: dict[str, list[Order]] = {option.product: [], underlying.product: []}
 
         underlying_prc = underlying.hist_mid_prc(1)[0]
         option_prc = option.hist_mid_prc(1)[0]
 
         tau = cal_tau(day=day, timestep=underlying.timestep)
         theo, delta = cal_call(
-            underlying_prc,
-            tau,
-            K=strike_price,
-            sigma=np.float64(1.1612241470737635e-06),
+            underlying_prc, tau, K=strike_price, sigma=np.float64(0.7844406637329328)
         )
-        iv = cal_imvol(option_prc, underlying_prc, tau, K=strike_price)
-        logger.print(f"{theo}, {delta}, {iv}")
+        logger.print(f"{option_prc=}, {underlying_prc=}, {tau=}, {strike_price=}")
+        iv = calculate_implied_volatility(
+            option_prc, underlying_prc, tau, K=strike_price
+        )
+        logger.print(f"{theo=}, {delta=}, {iv=}")
 
-        result[option.product].extend(Strategy.vol_arb(option, iv, threshold=0.00175))
+        result[option.product].extend(
+            Strategy.vol_arb(option, iv, 0.1212, threshold=0.5)
+        )
         result[underlying.product].extend(
-            Strategy.delta_hedge(underlying, option, delta, rebalance_threshold=60)
+            Strategy.delta_hedge(
+                underlying=underlying,
+                delta=delta,
+                option=option,
+                rebalance_threshold=30,
+            )
         )
-
         return result
 
 
 class Trader:
 
-    state_kelp = Status(Products.KELP)
-    state_resin = Status("RAINFOREST_RESIN")
-    state_ink = Status("SQUID_INK")
-    state_croissants = Status("CROISSANTS")
-    state_jams = Status("JAMS")
-    state_djembes = Status("DJEMBES")
-    state_basket1 = Status("PICNIC_BASKET1")
-    state_basket2 = Status("PICNIC_BASKET2")
-    state_volcanic_rock = Status(Products.VOLCANIC_ROCK)
-    state_volcanic_rock_voucher_9500 = Status(Products.VOLCANIC_ROCK_VOUCHER_9500)
-    state_volcanic_rock_voucher_9750 = Status(Products.VOLCANIC_ROCK_VOUCHER_9750)
-    state_volcanic_rock_voucher_10000 = Status(Products.VOLCANIC_ROCK_VOUCHER_10000)
-    state_volcanic_rock_voucher_10250 = Status(Products.VOLCANIC_ROCK_VOUCHER_10250)
-    state_volcanic_rock_voucher_10500 = Status(Products.VOLCANIC_ROCK_VOUCHER_10500)
+    state_kelp = Status(KELP)
+    state_resin = Status(RAINFOREST_RESIN)
+    state_ink = Status(SQUID_INK)
+    state_croissants = Status(CROISSANTS)
+    state_jams = Status(JAMS)
+    state_djembes = Status(DJEMBES)
+    state_basket1 = Status(PICNIC_BASKET1)
+    state_basket2 = Status(PICNIC_BASKET2)
+    state_volcanic_rock = Status(VOLCANIC_ROCK)
+    state_volcanic_rock_voucher_9500 = Status(VOLCANIC_ROCK_VOUCHER_9500)
+    state_volcanic_rock_voucher_9750 = Status(VOLCANIC_ROCK_VOUCHER_9750)
+    state_volcanic_rock_voucher_10000 = Status(VOLCANIC_ROCK_VOUCHER_10000)
+    state_volcanic_rock_voucher_10250 = Status(VOLCANIC_ROCK_VOUCHER_10250)
+    state_volcanic_rock_voucher_10500 = Status(VOLCANIC_ROCK_VOUCHER_10500)
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
@@ -1460,7 +1490,7 @@ class Trader:
         result = {}
 
         # # round 1
-        # result[Product.KELP] = Trade.kelp(self.state_kelp)
+        # result[Products.KELP] = Trade.kelp(self.state_kelp)
         # result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
         # result["SQUID_INK"] = Trade.ink(self.state_ink)
 
@@ -1472,13 +1502,14 @@ class Trader:
         # result["PICNIC_BASKET2"] = Trade.basket2(state=self.state_basket2)
 
         # Round 3
-        volcanic_rock_result = Trade.volcanic_rock(
+        volcanic_rock_result = Trade.volcanic_rock_voucher(
             self.state_volcanic_rock,
             self.state_volcanic_rock_voucher_10500,
             day=3,
-            strike_price=10500,
+            strike_price=10_500,
         )
-        result[Products.VOLCANIC_ROCK] = volcanic_rock_result[Products.VOLCANIC_ROCK]
+        result[VOLCANIC_ROCK] = volcanic_rock_result[VOLCANIC_ROCK]
+        result[VOLCANIC_ROCK_VOUCHER_9500] = volcanic_rock_result[VOLCANIC_ROCK]
         # result["VOLCANIC_ROCK_VOUCHER_9750"] = Trade.
         # result["VOLCANIC_ROCK_VOUCHER_10000"] = Trade.
         # result["VOLCANIC_ROCK_VOUCHER_10250"] = Trade.
