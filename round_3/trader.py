@@ -787,9 +787,7 @@ def cal_tau(day, timestep, T=7) -> float:
     return T - ((day - 1) * 750_000 + timestep) * 2e-7
 
 
-def cal_call(
-    S: int, tau: float, K, sigma: float = 0.16, r: float = 0.0
-) -> tuple[float, float]:
+def cal_call(S, tau, K, sigma: float = 0.16, r: float = 0.0) -> tuple[float, float]:
     """Calculate option price
 
     Args:
@@ -809,9 +807,8 @@ def cal_call(
 
 
 def calculate_implied_volatility(
-    market_price, S, tau, r=0, K=10000, tol=1e-6, max_iter=100
+    market_price, S, tau, sigma, r=0, K=10000, tol=1e-6, max_iter=100
 ):
-    sigma = 0.16
     diff = cal_call(S, tau, sigma)[0] - market_price
 
     iter_count = 0
@@ -1434,7 +1431,7 @@ class Trade:
         return Strategy.convert(state=state)
 
     @staticmethod
-    def volcanic_rock_voucher(
+    def volcanic_rock(
         underlying: Status, option: Status, day: int, strike_price: int
     ) -> dict[str, list[Order]]:
 
@@ -1443,28 +1440,62 @@ class Trade:
         underlying_prc = underlying.hist_mid_prc(1)[0]
         option_prc = option.hist_mid_prc(1)[0]
 
+        # volcanic rock histoical volatility
+        sigma = 0.06
+
+        # volcanic rock voucher historical volatility
+        hv = 29.69
+
         tau = cal_tau(day=day, timestep=underlying.timestep)
-        theo, delta = cal_call(
-            underlying_prc, tau, K=strike_price, sigma=np.float64(0.7844406637329328)
-        )
+
+        theo, delta = cal_call(underlying_prc, tau, K=strike_price, sigma=sigma)
         logger.print(f"{option_prc=}, {underlying_prc=}, {tau=}, {strike_price=}")
+
         iv = calculate_implied_volatility(
-            option_prc, underlying_prc, tau, K=strike_price
+            float(option_prc), float(underlying_prc), tau, K=strike_price, sigma=sigma
         )
         logger.print(f"{theo=}, {delta=}, {iv=}")
 
-        result[option.product].extend(
-            Strategy.vol_arb(option, iv, 0.1212, threshold=0.5)
-        )
+        result[option.product].extend(Strategy.vol_arb(option, iv, hv, threshold=0.1))
+
         result[underlying.product].extend(
             Strategy.delta_hedge(
                 underlying=underlying,
                 delta=delta,
                 option=option,
-                rebalance_threshold=30,
+                rebalance_threshold=60,
             )
         )
         return result
+
+    @staticmethod
+    def volcanic_rock_voucher(
+        underlying: Status,
+        option: Status,
+        day: int,
+        strike_price: int,
+        hv,
+    ) -> dict[str, list[Order]]:
+
+        result: dict[str, list[Order]] = {option.product: [], underlying.product: []}
+
+        underlying_prc = underlying.hist_mid_prc(1)[0]
+        option_prc = option.hist_mid_prc(1)[0]
+
+        # volcanic rock histoical volatility
+        sigma = 0.00028444
+
+        tau = cal_tau(day=day, timestep=underlying.timestep)
+
+        theo, delta = cal_call(underlying_prc, tau, K=strike_price, sigma=sigma)
+        logger.print(f"{option_prc=}, {underlying_prc=}, {tau=}, {strike_price=}")
+
+        iv = calculate_implied_volatility(
+            float(option_prc), float(underlying_prc), tau, K=strike_price, sigma=sigma
+        )
+        logger.print(f"{theo=}, {delta=}, {iv=}")
+
+        return Strategy.vol_arb(option, iv, hv, threshold=0.1)
 
 
 class Trader:
@@ -1490,29 +1521,57 @@ class Trader:
         result = {}
 
         # # round 1
-        # result[Products.KELP] = Trade.kelp(self.state_kelp)
-        # result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
-        # result["SQUID_INK"] = Trade.ink(self.state_ink)
+        result["KELP"] = Trade.kelp(self.state_kelp)
+        result["RAINFOREST_RESIN"] = Trade.resin(self.state_resin)
+        result["SQUID_INK"] = Trade.ink(self.state_ink)
 
         # # round 2
-        # result["CROISSANTS"] = Trade.croissants(self.state_croissants)
-        # result["JAMS"] = Trade.jams(self.state_jams)
-        # result["DJEMBES"] = Trade.djembes(self.state_djembes)
-        # result["PICNIC_BASKET1"] = Trade.basket1(state=self.state_basket1)
-        # result["PICNIC_BASKET2"] = Trade.basket2(state=self.state_basket2)
+        result["CROISSANTS"] = Trade.croissants(self.state_croissants)
+        result["JAMS"] = Trade.jams(self.state_jams)
+        result["DJEMBES"] = Trade.djembes(self.state_djembes)
+        result["PICNIC_BASKET1"] = Trade.basket1(state=self.state_basket1)
+        result["PICNIC_BASKET2"] = Trade.basket2(state=self.state_basket2)
 
         # Round 3
-        volcanic_rock_result = Trade.volcanic_rock_voucher(
+        volcanic_rock_result = Trade.volcanic_rock(
             self.state_volcanic_rock,
             self.state_volcanic_rock_voucher_10500,
             day=3,
             strike_price=10_500,
         )
         result[VOLCANIC_ROCK] = volcanic_rock_result[VOLCANIC_ROCK]
-        result[VOLCANIC_ROCK_VOUCHER_9500] = volcanic_rock_result[VOLCANIC_ROCK]
-        # result["VOLCANIC_ROCK_VOUCHER_9750"] = Trade.
-        # result["VOLCANIC_ROCK_VOUCHER_10000"] = Trade.
-        # result["VOLCANIC_ROCK_VOUCHER_10250"] = Trade.
+        result[VOLCANIC_ROCK_VOUCHER_10500] = volcanic_rock_result[
+            VOLCANIC_ROCK_VOUCHER_10500
+        ]
+
+        result["VOLCANIC_ROCK_VOUCHER_9500"] = Trade.volcanic_rock_voucher(
+            self.state_volcanic_rock,
+            self.state_volcanic_rock_voucher_9500,
+            day=3,
+            strike_price=9500,
+            hv=0.94,
+        )
+        result["VOLCANIC_ROCK_VOUCHER_9750"] = Trade.volcanic_rock_voucher(
+            self.state_volcanic_rock,
+            self.state_volcanic_rock_voucher_9750,
+            day=3,
+            strike_price=9750,
+            hv=1.44,
+        )
+        result["VOLCANIC_ROCK_VOUCHER_10000"] = Trade.volcanic_rock_voucher(
+            self.state_volcanic_rock,
+            self.state_volcanic_rock_voucher_10000,
+            day=3,
+            strike_price=10000,
+            hv=3.65,
+        )
+        result["VOLCANIC_ROCK_VOUCHER_10250"] = Trade.volcanic_rock_voucher(
+            self.state_volcanic_rock,
+            self.state_volcanic_rock_voucher_10250,
+            day=3,
+            strike_price=10250,
+            hv=7.6,
+        )
         # result[Products.VOLCANIC_ROCK_VOUCHER_10500] = volcanic_rock_result[
         #     Products.VOLCANIC_ROCK_VOUCHER_10500
         # ]
