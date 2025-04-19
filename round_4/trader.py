@@ -88,7 +88,8 @@ class Logger:
     def compress_listings(self, listings: dict[Symbol, Listing]) -> list[list[Any]]:
         compressed = []
         for listing in listings.values():
-            compressed.append([listing.symbol, listing.product, listing.denomination])
+            compressed.append(
+                [listing.symbol, listing.product, listing.denomination])
 
         return compressed
 
@@ -97,7 +98,8 @@ class Logger:
     ) -> dict[Symbol, list[Any]]:
         compressed = {}
         for symbol, order_depth in order_depths.items():
-            compressed[symbol] = [order_depth.buy_orders, order_depth.sell_orders]
+            compressed[symbol] = [
+                order_depth.buy_orders, order_depth.sell_orders]
 
         return compressed
 
@@ -414,8 +416,10 @@ class Status:
             int: possible buy amount
 
         """
-        possible_buy_amount1 = self._position_limit[self.product] - self.rt_position
-        possible_buy_amount2 = self._position_limit[self.product] - self.position
+        possible_buy_amount1 = self._position_limit[self.product] - \
+            self.rt_position
+        possible_buy_amount2 = self._position_limit[self.product] - \
+            self.position
         return min(possible_buy_amount1, possible_buy_amount2)
 
     @property
@@ -426,8 +430,10 @@ class Status:
             int: possible sell amount
 
         """
-        possible_sell_amount1 = self._position_limit[self.product] + self.rt_position
-        possible_sell_amount2 = self._position_limit[self.product] + self.position
+        possible_sell_amount1 = self._position_limit[self.product] + \
+            self.rt_position
+        possible_sell_amount2 = self._position_limit[self.product] + \
+            self.position
         return min(possible_sell_amount1, possible_sell_amount2)
 
     def hist_mid_prc(self, size: int) -> np.ndarray:
@@ -603,7 +609,8 @@ class Status:
             tuple[int, int]: (price, amount)
 
         """
-        best_prc = max(self._state.order_depths[self.product].buy_orders.keys())
+        best_prc = max(
+            self._state.order_depths[self.product].buy_orders.keys())
         best_amt = self._state.order_depths[self.product].buy_orders[best_prc]
         return best_amt
 
@@ -615,7 +622,8 @@ class Status:
             tuple[int, int]: (price, amount)
 
         """
-        best_prc = min(self._state.order_depths[self.product].sell_orders.keys())
+        best_prc = min(
+            self._state.order_depths[self.product].sell_orders.keys())
         best_amt = self._state.order_depths[self.product].sell_orders[best_prc]
         return -best_amt
 
@@ -676,7 +684,8 @@ class Status:
         vwap = 0
         for prc, amt in self._state.order_depths[self.product].sell_orders.items():
             vwap += prc * -amt
-        vwap /= -sum(self._state.order_depths[self.product].sell_orders.values())
+        vwap /= - \
+            sum(self._state.order_depths[self.product].sell_orders.values())
         return vwap
 
     @property
@@ -816,7 +825,8 @@ def cal_call(S, tau, K, sigma: float = 0.16, r: float = 0.0) -> tuple[float, flo
     Returns:
         Call price and delta
     """
-    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * tau) / (sigma * math.sqrt(tau))
+    d1 = (np.log(S / K) + (r + 0.5 * sigma**2)
+          * tau) / (sigma * math.sqrt(tau))
     delta = normalDist.cdf(d1)
     d2 = d1 - sigma * np.sqrt(tau)
     call_price = S * delta - K * math.exp(-r * tau) * normalDist.cdf(d2)
@@ -830,7 +840,8 @@ def calculate_implied_volatility(
 
     iter_count = 0
     while np.any(np.abs(diff) > tol) and iter_count < max_iter:
-        vega = (cal_call(S, tau, sigma + tol)[0] - cal_call(S, tau, sigma)[0]) / tol
+        vega = (cal_call(S, tau, sigma + tol)
+                [0] - cal_call(S, tau, sigma)[0]) / tol
         sigma -= diff / vega
         diff = cal_call(S, tau, sigma)[0] - market_price
         iter_count += 1
@@ -864,14 +875,16 @@ class Strategy:
             if ask_price < fair_price:
                 buy_amount = min(-ask_amount, state.possible_buy_amt)
                 if buy_amount > 0:
-                    orders.append(Order(state.product, int(ask_price), int(buy_amount)))
+                    orders.append(
+                        Order(state.product, int(ask_price), int(buy_amount)))
                     state.rt_position_update(state.rt_position + buy_amount)
                     state.update_asks(ask_price, -(-ask_amount - buy_amount))
 
             elif ask_price == fair_price:
                 if state.rt_position < 0:
                     buy_amount = min(-ask_amount, -state.rt_position)
-                    orders.append(Order(state.product, int(ask_price), int(buy_amount)))
+                    orders.append(
+                        Order(state.product, int(ask_price), int(buy_amount)))
                     state.rt_position_update(state.rt_position + buy_amount)
                     state.update_asks(ask_price, -(-ask_amount - buy_amount))
 
@@ -1017,7 +1030,7 @@ class Strategy:
         kappa_b = 1 / max((fair_price - state.best_bid) - 1, 1)
         kappa_a = 1 / max((state.best_ask - fair_price) - 1, 1)
 
-        vfucn = lambda q, Q: (
+        def vfucn(q, Q): return (
             -INF
             if (q == Q + 1 or q == -(Q + 1))
             else math.log(math.sin(((q + Q + 1) * math.pi) / (2 * Q + 2)))
@@ -1069,7 +1082,8 @@ class Strategy:
             execution_prob = ExecutionProb.orchids(delta)
 
             if my_ask > state.best_bid:
-                trading_profit = my_ask - (state.orchid_south_askprc + next_price_move)
+                trading_profit = my_ask - \
+                    (state.orchid_south_askprc + next_price_move)
                 expected_profit = execution_prob * (trading_profit - cost)
 
             else:
@@ -1115,7 +1129,8 @@ class Strategy:
             execution_prob = ExecutionProb.orchids(delta)
 
             if my_bid < state.best_ask:
-                trading_profit = (state.orchid_south_bidprc + next_price_move) - my_bid
+                trading_profit = (state.orchid_south_bidprc +
+                                  next_price_move) - my_bid
                 expected_profit = execution_prob * (trading_profit - cost)
 
             else:
@@ -1158,14 +1173,16 @@ class Strategy:
             and ask_max_expected_profit > 0
         ):
             orders.append(
-                Order(state.product, int(optimal_my_ask), -int(state.position_limit))
+                Order(state.product, int(optimal_my_ask), -
+                      int(state.position_limit))
             )
         elif (
             bid_max_expected_profit > ask_max_expected_profit
             and bid_max_expected_profit > 0
         ):
             orders.append(
-                Order(state.product, int(optimal_my_bid), int(state.position_limit))
+                Order(state.product, int(optimal_my_bid),
+                      int(state.position_limit))
             )
 
         return orders
@@ -1206,7 +1223,8 @@ class Strategy:
         elif norm_spread < -threshold:
             orders.append(
                 Order(
-                    basket.product, int(basket.worst_ask), int(basket.possible_buy_amt)
+                    basket.product, int(basket.worst_ask), int(
+                        basket.possible_buy_amt)
                 )
             )
 
@@ -1221,7 +1239,8 @@ class Strategy:
 
         if vol_spread > threshold:
             sell_amount = option.possible_sell_amt
-            orders.append(Order(option.product, option.worst_bid, -sell_amount))
+            orders.append(
+                Order(option.product, option.worst_bid, -sell_amount))
             executed_amount = min(sell_amount, option.total_bidamt)
             option.rt_position_update(option.rt_position - executed_amount)
 
@@ -1245,7 +1264,8 @@ class Strategy:
         if underlying.bid_ask_spread == 1 and abs(position_diff) > rebalance_threshold:
 
             if position_diff < 0:
-                sell_amount = min(abs(position_diff), underlying.possible_sell_amt)
+                sell_amount = min(abs(position_diff),
+                                  underlying.possible_sell_amt)
                 orders.append(
                     Order(underlying.product, underlying.best_bid, -sell_amount)
                 )
@@ -1452,7 +1472,8 @@ class Trade:
         underlying: Status, option: Status, day: int, strike_price: int
     ) -> dict[str, list[Order]]:
 
-        result: dict[str, list[Order]] = {option.product: [], underlying.product: []}
+        result: dict[str, list[Order]] = {
+            option.product: [], underlying.product: []}
 
         underlying_prc = underlying.hist_mid_prc(1)[0]
         option_prc = option.hist_mid_prc(1)[0]
@@ -1465,15 +1486,18 @@ class Trade:
 
         tau = cal_tau(day=day, timestep=underlying.timestep)
 
-        theo, delta = cal_call(underlying_prc, tau, K=strike_price, sigma=sigma)
-        logger.print(f"{option_prc=}, {underlying_prc=}, {tau=}, {strike_price=}")
+        theo, delta = cal_call(underlying_prc, tau,
+                               K=strike_price, sigma=sigma)
+        logger.print(f"{option_prc=}, {underlying_prc=}, {
+                     tau=}, {strike_price=}")
 
         iv = calculate_implied_volatility(
             float(option_prc), float(underlying_prc), tau, K=strike_price, sigma=sigma
         )
         logger.print(f"{theo=}, {delta=}, {iv=}")
 
-        result[option.product].extend(Strategy.vol_arb(option, iv, hv, threshold=0.1))
+        result[option.product].extend(
+            Strategy.vol_arb(option, iv, hv, threshold=0.1))
 
         result[underlying.product].extend(
             Strategy.delta_hedge(
@@ -1494,7 +1518,8 @@ class Trade:
         hv,
     ) -> dict[str, list[Order]]:
 
-        result: dict[str, list[Order]] = {option.product: [], underlying.product: []}
+        result: dict[str, list[Order]] = {
+            option.product: [], underlying.product: []}
 
         underlying_prc = underlying.hist_mid_prc(1)[0]
         option_prc = option.hist_mid_prc(1)[0]
@@ -1504,8 +1529,10 @@ class Trade:
 
         tau = cal_tau(day=day, timestep=underlying.timestep)
 
-        theo, delta = cal_call(underlying_prc, tau, K=strike_price, sigma=sigma)
-        logger.print(f"{option_prc=}, {underlying_prc=}, {tau=}, {strike_price=}")
+        theo, delta = cal_call(underlying_prc, tau,
+                               K=strike_price, sigma=sigma)
+        logger.print(f"{option_prc=}, {underlying_prc=}, {
+                     tau=}, {strike_price=}")
 
         iv = calculate_implied_volatility(
             float(option_prc), float(underlying_prc), tau, K=strike_price, sigma=sigma
@@ -1516,6 +1543,17 @@ class Trade:
 
     @staticmethod
     def macrons(status: Status):
+
+        # macrons model
+        macrons_model = {
+            "transportFees": np.float64(0.0034042643909708644),
+            "exportTariff": np.float64(-0.05641549846074023),
+            "importTariff": np.float64(-0.04706516406649433),
+            "sugarPrice": np.float64(-0.0026126014607663617),
+            "sunlightIndex": np.float64(-0.006652065937066909),
+            "midPrice": np.float64(0.998629531006099),
+        }
+
         fair_price = 0
 
         for f, c in macrons_model.items():
@@ -1527,17 +1565,6 @@ class Trade:
         logger.print(f"Macrons {fair_price=}")
 
         return Strategy.arb(status, fair_price=fair_price)
-
-
-# macrons model
-macrons_model = {
-    "transportFees": np.float64(0.0034042643909708644),
-    "exportTariff": np.float64(-0.05641549846074023),
-    "importTariff": np.float64(-0.04706516406649433),
-    "sugarPrice": np.float64(-0.0026126014607663617),
-    "sunlightIndex": np.float64(-0.006652065937066909),
-    "midPrice": np.float64(0.998629531006099),
-}
 
 
 class Trader:
@@ -1556,7 +1583,7 @@ class Trader:
     state_volcanic_rock_voucher_10000 = Status(VOLCANIC_ROCK_VOUCHER_10000)
     state_volcanic_rock_voucher_10250 = Status(VOLCANIC_ROCK_VOUCHER_10250)
     state_volcanic_rock_voucher_10500 = Status(VOLCANIC_ROCK_VOUCHER_10500)
-    state_macros = Status(MACRONS)
+    state_macrons = Status(MACRONS)
 
     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
         Status.cls_update(state)
@@ -1620,7 +1647,7 @@ class Trader:
         # ]
 
         # Round 4
-        result[MACRONS] = Trade.macrons(self.state_macros)
+        result[MACRONS] = Trade.macrons(self.state_macrons)
 
         conversions = 1
 
