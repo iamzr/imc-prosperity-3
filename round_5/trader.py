@@ -179,16 +179,16 @@ class Logger:
 logger = Logger()
 
 
-class Trader:
-    def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
-        result = {}
-        conversions = 0
-        trader_data = ""
+# class Trader:
+#     def run(self, state: TradingState) -> tuple[dict[Symbol, list[Order]], int, str]:
+#         result = {}
+#         conversions = 0
+#         trader_data = ""
 
-        # TODO: Add logic
+#         # TODO: Add logic
 
-        logger.flush(state, result, conversions, trader_data)
-        return result, conversions, trader_data
+#         logger.flush(state, result, conversions, trader_data)
+#         return result, conversions, trader_data
 
 
 logger = Logger()
@@ -1493,10 +1493,13 @@ class Trade:
 
     @staticmethod
     def volcanic_rock(
-        underlying: Status, option: Status, day: int, strike_price: int
+        underlying: Status, option: Status, day: int, strike_price: int, hv: float
     ) -> dict[str, list[Order]]:
 
-        result: dict[str, list[Order]] = {option.product: [], underlying.product: []}
+        # result: dict[str, list[Order]] = {option.product: [], underlying.product: []}
+
+        option_orders = []
+        underlying_orders = []
 
         underlying_prc = underlying.hist_mid_prc(1)[0]
         option_prc = option.hist_mid_prc(1)[0]
@@ -1505,7 +1508,7 @@ class Trade:
         sigma = 0.06
 
         # volcanic rock voucher historical volatility
-        hv = 29.69
+        # hv = 29.69
 
         tau = cal_tau(day=day, timestep=underlying.timestep)
 
@@ -1520,9 +1523,9 @@ class Trade:
         )
         # logger.print(f"{theo=}, {delta=}, {iv=}")
 
-        result[option.product].extend(Strategy.vol_arb(option, iv, hv, threshold=0.1))
+        option_orders.extend(Strategy.vol_arb(option, iv, hv, threshold=0.1))
 
-        result[underlying.product].extend(
+        underlying_orders.extend(
             Strategy.delta_hedge(
                 underlying=underlying,
                 delta=delta,
@@ -1530,7 +1533,7 @@ class Trade:
                 rebalance_threshold=60,
             )
         )
-        return result
+        return option_orders, underlying_orders
 
     @staticmethod
     def volcanic_rock_voucher(
@@ -1632,51 +1635,58 @@ class Trader:
         #
         # # Round 3
         day = 5
-        volcanic_rock_result = Trade.volcanic_rock(
+        (
+            result[VOLCANIC_ROCK_VOUCHER_10500],
+            result[VOLCANIC_ROCK],
+        ) = Trade.volcanic_rock(
             self.state_volcanic_rock,
             self.state_volcanic_rock_voucher_10500,
             day=day,
+            hv=29.69,
             strike_price=10_500,
         )
-        result[VOLCANIC_ROCK] = volcanic_rock_result[VOLCANIC_ROCK]
-        result[VOLCANIC_ROCK_VOUCHER_10500] = volcanic_rock_result[
-            VOLCANIC_ROCK_VOUCHER_10500
-        ]
-        #
-        result["VOLCANIC_ROCK_VOUCHER_9500"] = Trade.volcanic_rock_voucher(
+
+        result["VOLCANIC_ROCK_VOUCHER_9500"], volcanic_rock = Trade.volcanic_rock(
             self.state_volcanic_rock,
             self.state_volcanic_rock_voucher_9500,
             day=day,
             strike_price=9500,
             hv=0.94,
         )
-        result["VOLCANIC_ROCK_VOUCHER_9750"] = Trade.volcanic_rock_voucher(
+
+        result[VOLCANIC_ROCK].extend(volcanic_rock)
+
+        result["VOLCANIC_ROCK_VOUCHER_9750"], volcanic_rock = Trade.volcanic_rock(
             self.state_volcanic_rock,
             self.state_volcanic_rock_voucher_9750,
             day=day,
             strike_price=9750,
             hv=1.44,
         )
-        result["VOLCANIC_ROCK_VOUCHER_10000"] = Trade.volcanic_rock_voucher(
+
+        result[VOLCANIC_ROCK].extend(volcanic_rock)
+
+        result["VOLCANIC_ROCK_VOUCHER_10000"], volcanic_rock = Trade.volcanic_rock(
             self.state_volcanic_rock,
             self.state_volcanic_rock_voucher_10000,
             day=day,
             strike_price=10000,
             hv=3.65,
         )
-        result["VOLCANIC_ROCK_VOUCHER_10250"] = Trade.volcanic_rock_voucher(
+        result[VOLCANIC_ROCK].extend(volcanic_rock)
+
+        result["VOLCANIC_ROCK_VOUCHER_10250"], volcanic_rock = Trade.volcanic_rock(
             self.state_volcanic_rock,
             self.state_volcanic_rock_voucher_10250,
             day=day,
             strike_price=10250,
             hv=7.6,
         )
-        # result[Products.VOLCANIC_ROCK_VOUCHER_10500] = volcanic_rock_result[
-        #     Products.VOLCANIC_ROCK_VOUCHER_10500
-        # ]
+
+        result[VOLCANIC_ROCK].extend(volcanic_rock)
 
         # Round 4
-        # result[MACRONS] = Trade.macrons(self.state_macrons)
+        result[MACRONS] = Trade.macrons(self.state_macrons)
 
         conversions = 1
 
