@@ -889,12 +889,13 @@ class ExecutionProb:
             return 0.571
         elif delta > -0.5:
             return 0
-        elif delta == -1.0:
-            return 0.2685
-        elif delta == -0.75:
-            return 0.2107
         elif delta == -0.5:
             return 0.1699
+        elif delta >= -0.75:
+            return 0.2107
+        elif delta >= -1.0:
+            return 0.2685
+        
 
 
 class Strategy:
@@ -1589,8 +1590,12 @@ class Trade:
                 fair_price += status._hist_observation[f][-1] * c
 
         # logger.print(f"Macrons {fair_price=}")
-
-        return Strategy.mm_glft(status, fair_price)
+        
+        orders = []
+        
+        # orders.extend(Strategy.exchange_arb(status, fair_price))
+        orders.extend(Strategy.mm_glft(status, fair_price))
+        return orders
 
 
 class Trader:
